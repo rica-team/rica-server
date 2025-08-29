@@ -3,7 +3,7 @@ import functools
 from uuid import UUID
 from typing import Callable, Any
 
-from exceptions import *
+from .exceptions import *
 
 
 __all__ = ["RiCA", "Application", "CallBack"]

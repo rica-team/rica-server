@@ -8,8 +8,8 @@ from __future__ import annotations
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
-from server import *
-import connector
+from .server import *
+from . import connector
 
 __all__ = ["RiCA", "Application", "CallBack", "connector"]
 

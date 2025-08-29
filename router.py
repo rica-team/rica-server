@@ -3,8 +3,8 @@ import json
 from uuid import uuid4, UUID
 from typing import Callable, Any
 
-from server import RiCA, CallBack, Application
-from exceptions import *
+from .server import RiCA, CallBack, Application
+from .exceptions import *
 
 __all__ = ["preset"]
 
