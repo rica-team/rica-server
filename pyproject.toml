@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rica-server"
+version = "0.0.1dev1"
+description = "Multi-threaded Reasoning for Large Language Models"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "kaokao221", email = "kaokao221@outlook.com" }]
+license = { file = "LICENSE" }
+keywords = ["llms", "pytorch", "nlp"]
+
+dependencies = []
+
+[project.optional-dependencies]
+pt = [
+  "transformers",
+  "torch",
+  "timm",
+  "accelerate",
+  "hf_xet"
+]
+
+[project.urls]
+Repository = "https://github.com/rica-team/rica-server.git"
+
+[tool.setuptools.package-dir]
+rica = "."
+"rica.connector" = "connector"
+
+[tool.setuptools]
+packages = ["rica", "rica.connector"]

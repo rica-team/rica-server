@@ -6,7 +6,10 @@ from typing import Callable, Any
 from exceptions import *
 
 
-async def package_checker(package: str) -> bool:
+__all__ = ["RiCA", "Application", "CallBack"]
+
+
+async def _package_checker(package: str) -> bool:
     if not package or len(package) > 256:
         return False
 
@@ -40,12 +43,7 @@ class CallBack:
         self.callback: str | dict | list = callback
 
 
-def route(package: str, background: bool = False, timeout: int = -1):
-    """
-    用于类内部方法的声明式路由装饰器。
-    仅在定义期标记元数据，实际注册在 RiCA.__init__ 中完成。
-    """
-
+def _lock(package: str, background: bool = False, timeout: int = -1):
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, "_rica_route_meta", {
             "package": package,
@@ -61,9 +59,7 @@ class RiCA:
     def __init__(self):
         self.endpoints: list[Application] = []
 
-        # 扫描类中被 @route 标记的方法并注册
         for name, obj in self.__class__.__dict__.items():
-            # 仅处理函数（未绑定）
             meta = getattr(obj, "_rica_route_meta", None)
             if not meta:
                 continue
@@ -72,20 +68,18 @@ class RiCA:
             background = meta["background"]
             timeout = meta["timeout"]
 
-            # 校验包名与重复
-            if not asyncio.run(package_checker(package)):
+            if not asyncio.run(_package_checker(package)):
                 raise PackageInvalidError
             if package in [application.package for application in self.endpoints]:
                 raise PackageExistError
 
-            # 绑定成实例方法后注册
             bound_method = getattr(self, name)
             self.endpoints.append(Application(package, bound_method, background, timeout))
 
-    def new(self, package: str, background: bool = False, timeout: int = -1) -> Callable[
+    def register(self, package: str, background: bool = True, timeout: int = -1) -> Callable[
         [Callable[..., Any]], Callable[..., Any]]:
         async def init_checks():
-            if not await package_checker(package):
+            if not await _package_checker(package):
                 raise PackageInvalidError("Package name {} is invalid.".format(package))
 
             if package in [application.package for application in self.endpoints]:
@@ -111,6 +105,10 @@ class RiCA:
 
         return decorator
 
+    def new(self, package: str, background: bool = True, timeout: int = -1) -> Callable[
+        [Callable[..., Any]], Callable[..., Any]]:
+        return self.new(package, background, timeout)
+
     async def append(self, server: "RiCA"):
         backup = self.endpoints.copy()
         for application in server.endpoints:
@@ -126,10 +124,8 @@ class RiCA:
         result = RiCA()
         package_sources = {}
 
-        # Check for duplicates first
         for i, server in enumerate(servers):
             for app in server.endpoints:
-                # Skip @route decorated methods
                 if hasattr(app.function, "_rica_route_meta"):
                     continue
 
@@ -141,16 +137,15 @@ class RiCA:
                     )
                 package_sources[app.package] = i
 
-        # If no duplicates found, merge all servers
         for server in servers:
             await result.append(server)
 
         return result
 
-    @route("rica.threading.new", background=True, timeout=-1)
+    @_lock("rica.threading.new", background=True, timeout=-1)
     def _rica_threading_new(self):
         ...
 
-    @route("rica.task.wait", background=False, timeout=-1)
+    @_lock("rica.task.wait", background=False, timeout=-1)
     def _rica_task_wait(self):
         ...
