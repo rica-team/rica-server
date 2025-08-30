@@ -1,9 +1,18 @@
+"""
+Router utilities for RiCA Server.
+
+This module decodes <rica ...>...</rica> tool-call strings, locates the
+registered package in the configured RiCA application, and executes the
+corresponding function either in the foreground (awaited) or background
+(asyncio Task with optional timeout). It returns a UUID for background calls
+or a CallBack object for foreground calls.
+"""
 import asyncio
 import json
 from uuid import uuid4, UUID
 from typing import Callable, Any
 
-from .server import RiCA, CallBack, Application
+from .server import RiCA, CallBack
 from .exceptions import *
 
 __all__ = ["preset"]
@@ -19,11 +28,29 @@ _deactivate_tasks:list[asyncio.Task] = []
 
 _application:RiCA = RiCA()
 
-async def preset(application:RiCA):
-    global _application
-    _application:RiCA = application
+class _Router:
+    """Holds the configured RiCA application for routing tool calls."""
 
-async def _call(function:Callable[..., Any], data:list | dict, timeout:int, background:bool) -> UUID | CallBack:
+    def __init__(self):
+        self._application: RiCA = RiCA()
+        self._interactive_tasks: list[asyncio.Task] = []
+        self._deactivate_tasks: list[asyncio.Task] = []
+
+    async def configure(self, application: RiCA):
+        """Configure the router with a RiCA application instance."""
+        global _application
+        self._application = application
+        _application = application
+
+Router = _Router()
+preset = Router.configure
+
+async def _call(function: Callable[..., Any], data: list | dict, timeout: int, background: bool) -> UUID | CallBack:
+    """Execute a registered function either in background or foreground.
+
+    - If background is True, schedule the call on the global event loop and return a UUID.
+    - If background is False, await completion and return a CallBack wrapping the result.
+    """
     function = function if asyncio.iscoroutinefunction(function) else asyncio.to_thread(function)
     if background:
         call_id = uuid4()
@@ -43,7 +70,8 @@ async def _call(function:Callable[..., Any], data:list | dict, timeout:int, back
         except Exception as e:
             raise UnexpectedExecutionError(str(e))
 
-async def _decode(input_) -> tuple[Callable[..., Any], list | dict, int, bool]:
+async def _decode(input_: str) -> tuple[Callable[..., Any], list | dict, int, bool]:
+    """Parse a <rica ...>...</rica> string and return the target callable and options."""
     if not isinstance(input_, str):
         raise InvalidRiCAString("Input must be a string")
 
@@ -77,8 +105,13 @@ async def _decode(input_) -> tuple[Callable[..., Any], list | dict, int, bool]:
     except Exception as e:
         raise InvalidRiCAString(f"Failed to decode Rica format: {str(e)}")
 
-async def _execute(input_) -> UUID | CallBack:
+
+async def _execute(input_: str) -> UUID | CallBack:
+    """Decode and execute a tool-call string, returning a UUID or CallBack."""
     _call_tuple = await _decode(input_)
     return await _call(*_call_tuple)
 
-async def _deactivate(package:str) -> None:...
+
+async def _deactivate(package: str) -> None:
+    """Deactivate a package (placeholder for future implementation)."""
+    ...

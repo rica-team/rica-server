@@ -7,11 +7,18 @@ from __future__ import annotations
 
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
+import asyncio
 
 from .server import *
 from . import connector
 
 __all__ = ["RiCA", "Application", "CallBack", "connector"]
+
+try:
+    _loop = asyncio.get_running_loop()
+except RuntimeError:
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
 
 _DISTRIBUTION_NAME = "rica-server"
 

@@ -1,3 +1,9 @@
+"""Server module for RiCA.
+
+Defines the RiCA class, route registration utilities, and simple Application
+and CallBack containers. Ensures packages are validated and that externally
+provided functions are wrapped into async callables when registered.
+"""
 import asyncio
 import functools
 from uuid import UUID
@@ -10,6 +16,7 @@ __all__ = ["RiCA", "Application", "CallBack"]
 
 
 async def _package_checker(package: str) -> bool:
+    """Check whether a package name is syntactically valid."""
     if not package or len(package) > 256:
         return False
 
@@ -29,6 +36,8 @@ async def _package_checker(package: str) -> bool:
 
 
 class Application:
+    """A registered tool endpoint description."""
+
     def __init__(self, package: str, function: Callable[..., Any], background: bool, timeout: int):
         self.package: str = package
         self.function: Callable[..., Any] = function
@@ -37,6 +46,8 @@ class Application:
 
 
 class CallBack:
+    """Encapsulates the result of a synchronous tool call."""
+
     def __init__(self, package: str, call_id: UUID, callback: str | dict | list):
         self.package: str = package
         self.call_id: UUID = call_id
@@ -44,18 +55,31 @@ class CallBack:
 
 
 def _lock(package: str, background: bool = False, timeout: int = -1):
+    """Decorator to mark a method as a tool endpoint with routing metadata."""
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        setattr(func, "_rica_route_meta", {
-            "package": package,
-            "background": background,
-            "timeout": timeout,
-        })
+        setattr(
+            func,
+            "_rica_route_meta",
+            {
+                "package": package,
+                "background": background,
+                "timeout": timeout,
+            },
+        )
         return func
 
     return decorator
 
 
 class RiCA:
+    """Reasoning Interface for Connector Applications.
+
+    Instances scan their class dict for methods decorated with @_lock on init
+    and register them as endpoints. New endpoints can be added dynamically via
+    register/new.
+    """
+
     def __init__(self):
         self.endpoints: list[Application] = []
 
@@ -78,6 +102,11 @@ class RiCA:
 
     def register(self, package: str, background: bool = True, timeout: int = -1) -> Callable[
         [Callable[..., Any]], Callable[..., Any]]:
+        """Register a new endpoint dynamically.
+
+        Non-async functions are wrapped with asyncio.to_thread so they behave as async callables.
+        """
+
         async def init_checks():
             if not await _package_checker(package):
                 raise PackageInvalidError("Package name {} is invalid.".format(package))
@@ -107,9 +136,11 @@ class RiCA:
 
     def new(self, package: str, background: bool = True, timeout: int = -1) -> Callable[
         [Callable[..., Any]], Callable[..., Any]]:
-        return self.new(package, background, timeout)
+        """Alias of register for convenience."""
+        return self.register(package, background, timeout)
 
     async def append(self, server: "RiCA"):
+        """Append endpoints from another RiCA instance, checking duplicates."""
         backup = self.endpoints.copy()
         for application in server.endpoints:
             if hasattr(application.function, "_rica_route_meta"):
@@ -121,6 +152,7 @@ class RiCA:
 
     @staticmethod
     async def concat(*servers: "RiCA") -> "RiCA":
+        """Concatenate endpoints from multiple RiCA instances with duplicate detection."""
         result = RiCA()
         package_sources = {}
 
@@ -142,10 +174,21 @@ class RiCA:
 
         return result
 
-    @_lock("rica.threading.new", background=True, timeout=-1)
-    def _rica_threading_new(self):
+    @_lock("rica.response", background=False, timeout=-1)
+    async def _rica_response(self):
+        """
+        Tool to respond to user with formatted content. Currently only plain text is supported.
+        input: [<objects>]
+        output: {"status": "success"}
+        objects:
+            {"type": "text", "content": "text content"}
+        """
         ...
 
-    @_lock("rica.task.wait", background=False, timeout=-1)
-    def _rica_task_wait(self):
+    @_lock("rica.userinput")
+    async def _rica_userinput(self):
+        """
+        IMPORTANT: This package cannot be called. It's only for Insert A User Input.
+        output: [Plain Text] <User Inserted Text>
+        """
         ...

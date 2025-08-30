@@ -1,5 +1,5 @@
 from rica import RiCA
-from rica.connector import transformer_adapter as tf
+from rica.connector import transformers_adapter as tf
 
 app = RiCA()
 

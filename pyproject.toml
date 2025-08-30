@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,7 @@ description = "Multi-threaded Reasoning for Large Language Models"
 readme = "README.md"
 requires-python = ">=3.8"
 authors = [{ name = "kaokao221", email = "kaokao221@outlook.com" }]
-license = { file = "LICENSE" }
+license = "GPL-3.0-only"
 keywords = ["llms", "pytorch", "nlp"]
 
 dependencies = []
@@ -29,6 +29,29 @@ Repository = "https://github.com/rica-team/rica-server.git"
 [tool.setuptools.package-dir]
 rica = "."
 "rica.connector" = "connector"
+"rica.utils" = "utils"
 
 [tool.setuptools]
-packages = ["rica", "rica.connector"]
+packages = ["rica", "rica.connector", "rica.utils"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+include = "\\.(py|pyi)$"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+select = [
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "I",  # isort
+]
+ignore = []
+exclude = [
+  ".git",
+  ".venv",
+  "dist",
+  "build",
+  "rica_server.egg-info",
+]

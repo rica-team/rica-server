@@ -1,5 +1,13 @@
 """
-This is the RiCA Connector whose purpose is to connect the Rica Server with the LLM.
+This is the RiCA Connector whose purpose is to connect the RiCA Server with the LLM.
 """
-__all__ = ["transformer_adapter"]
+
+# Expose both names for compatibility: transformer_adapter (alias) and transformers_adapter
+from . import transformers_adapter as transformer_adapter
+from . import transformers_adapter
+
+__all__ = [
+    "transformer_adapter",
+    "transformers_adapter",
+]
 
