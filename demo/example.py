@@ -1,4 +1,4 @@
-from rica import RiCA
+from rica.server import RiCA
 from rica.connector import transformers_adapter as tf
 
 app = RiCA()
@@ -27,6 +27,6 @@ rt = tf.ReasoningThread("")
 
 @rt.trigger
 def _output(content):
-    print(content)
+    print(content, end="", flush=True)
 
-rt.insert("Please calculate 123*456 please.")
+rt.insert("Please calculate 123*456 using Python.")

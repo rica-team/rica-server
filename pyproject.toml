@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -25,11 +25,6 @@ pt = [
 
 [project.urls]
 Repository = "https://github.com/rica-team/rica-server.git"
-
-[tool.setuptools.package-dir]
-rica = "."
-"rica.connector" = "connector"
-"rica.utils" = "utils"
 
 [tool.setuptools]
 packages = ["rica", "rica.connector", "rica.utils"]

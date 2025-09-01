@@ -7,7 +7,6 @@ from . import transformers_adapter as transformer_adapter
 from . import transformers_adapter
 
 __all__ = [
-    "transformer_adapter",
     "transformers_adapter",
 ]
 

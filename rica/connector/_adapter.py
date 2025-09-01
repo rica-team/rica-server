@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from .. import router
 
@@ -94,7 +94,7 @@ class _ReasoningThreadTemplate:
             else:
                 asyncio.create_task(asyncio.to_thread(cb, piece))
 
-    async def _detect_and_execute_tool_tail(self) -> bool:
+    async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
         """
         Detect a trailing <rica ...>...</rica> in the current context, execute it
         via router._execute, append the result to the context, and emit it.
@@ -105,7 +105,7 @@ class _ReasoningThreadTemplate:
         pattern = r"<rica\s+[^>]*>.*?</rica>$"
         m = re.search(pattern, tail, re.DOTALL)
         if not m:
-            return False
+            return False, None
 
         # Extract the full last tag from the entire context to ensure complete content
         last = None
@@ -130,7 +130,7 @@ class _ReasoningThreadTemplate:
 
             self._context += appended
             await self._emit(appended)
-            return True
+            return True, appended
         except Exception as e:
             await self._emit(f"[tool-error]{type(e).__name__}: {e}")
-            return False
+            return False, None
