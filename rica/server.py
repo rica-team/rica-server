@@ -15,7 +15,7 @@ from .exceptions import *
 __all__ = ["RiCA", "Application", "CallBack"]
 
 
-async def _package_checker(package: str) -> bool:
+def _package_checker(package: str) -> bool:
     """Check whether a package name is syntactically valid."""
     if not package or len(package) > 256:
         return False
@@ -92,11 +92,6 @@ class RiCA:
             background = meta["background"]
             timeout = meta["timeout"]
 
-            if not asyncio.run(_package_checker(package)):
-                raise PackageInvalidError
-            if package in [application.package for application in self.endpoints]:
-                raise PackageExistError
-
             bound_method = getattr(self, name)
             self.endpoints.append(Application(package, bound_method, background, timeout))
 
@@ -107,14 +102,14 @@ class RiCA:
         Non-async functions are wrapped with asyncio.to_thread so they behave as async callables.
         """
 
-        async def init_checks():
-            if not await _package_checker(package):
+        def init_checks():
+            if not _package_checker(package):
                 raise PackageInvalidError("Package name {} is invalid.".format(package))
 
             if package in [application.package for application in self.endpoints]:
                 raise PackageExistError("Package {} already exists.".format(package))
 
-        asyncio.create_task(init_checks())
+        init_checks()
 
         def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
             self.endpoints.append(Application(package, function, background, timeout))

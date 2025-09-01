@@ -2,226 +2,256 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Callable, Any, List, Optional, Dict
+from typing import Any, Callable, Dict, List, Optional
 
 from ..exceptions import AdapterDependenciesImportError
 from ._adapter import _ReasoningThreadTemplate
 
 try:
     import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 except ImportError:
-    # 错误会在适配器导入时触发，保留明确信息
-    raise AdapterDependenciesImportError("使用此适配器需要 transformers 和 pytorch。")
+    # The error will be raised upon adapter import; the message is explicit.
+    raise AdapterDependenciesImportError(
+        "The transformers adapter requires 'transformers' and 'torch' to be installed.")
 
 default_model_name = "google/gemma-3-1b-it"
 
 
 class ReasoningThread(_ReasoningThreadTemplate):
     """
-    基于 HF Transformers 的推理线程，带有即时插入和工具调用执行功能。
+    A reasoning thread based on Hugging Face Transformers that supports a token-by-token
+    generation loop with real-time text insertion and tool-call execution.
 
-    职责:
-    - 维护一个可变的文本上下文。
-    - 支持在下一个生成 token 后立即生效的文本插入。
-    - 逐 token 生成文本，并在上下文尾部检测 <rica ...>...</rica> 工具调用。
-    - 检测到工具调用时，通过 router._execute 执行并立即追加结果。
-    - 通过 @rt.trigger 注册回调函数，在新文本追加时立即调用。
-    - 生命周期控制: run/pause/wait/destroy。
+    Responsibilities:
+    - Maintain a mutable string context for the language model.
+    - Support immediate text insertions that are processed before the next generation step.
+    - Generate tokens one by one, continuously checking the context tail for <rica> tool calls.
+    - Execute detected tool calls via the router and append their results to the context.
+    - Provide a decorator `@rt.trigger` to register callbacks for newly generated text.
+    - Offer lifecycle controls: run, pause, wait, and destroy.
     """
 
-    def __init__(self, context: str = "", model_name: str = default_model_name,
-                 generation_config: Optional[Dict[str, Any]] = None):
+    def __init__(
+            self,
+            context: str = "",
+            model_name: str = default_model_name,
+            generation_config: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(context)
         self.model_name: str = model_name
 
-        # 运行时状态
+        # --- Runtime State ---
         self._pending_inserts: asyncio.Queue[str] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+
+        # --- Control Events ---
         self._pause_event = asyncio.Event()
         self._stop_event = asyncio.Event()
         self._done_event = asyncio.Event()
-        self._lock = asyncio.Lock()
+        self._pause_event.set()  # Start in a running state
 
-        # 模型/分词器 (懒加载)
+        # --- Model & Tokenizer (lazy-loaded) ---
         self._model: Optional[AutoModelForCausalLM] = None
         self._tokenizer: Optional[AutoTokenizer] = None
         self._device: Optional[str] = None
-        self._eos_id: Optional[int] = None
 
-        # 生成配置
-        self._generation_config = GenerationConfig(**(generation_config or {}))
-        if not hasattr(self._generation_config, "pad_token_id"):
-            self._generation_config.pad_token_id = self._generation_config.eos_token_id
+        # --- Generation Configuration ---
+        # Set default generation strategy if not provided.
+        default_config = {"use_cache": True, "do_sample": True, "temperature": 0.7, "top_p": 0.95}
+        if generation_config:
+            default_config.update(generation_config)
+        self._generation_config = GenerationConfig(**default_config)
 
-        # 初始时设置为非暂停状态
-        self._pause_event.set()
-        # 创建任务骨架，但不立即运行
+        # Start the main loop task upon initialization. It will wait for run() or insert().
         self._task = asyncio.create_task(self._run_loop())
 
-    # -------- 公共生命周期 API --------
+    # --------------------------------------------------------------------------
+    # Public Lifecycle API
+    # --------------------------------------------------------------------------
+
     async def insert(self, text: Any):
+        """
+        Inserts external text into the context. The text will be processed
+        before the next model generation step. This also resumes the thread if paused.
+        """
         if text is None:
             return
         s = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
 
+        # The context is updated immediately for external readers.
         async with self._lock:
             self._context += s
         await self._emit(s)
         await self._pending_inserts.put(s)
 
-        # 如果任务暂停，则恢复
-        self._pause_event.set()
+        # Ensure the generation loop is running to process the insert.
+        self.run()
 
     async def wait(self):
+        """Waits until the current generation task completes (e.g., hits EOS or is stopped)."""
         if self._task and not self._task.done():
             await self._done_event.wait()
 
     async def destroy(self):
-        self._stop_event.set()
-        self._pause_event.set()  # 确保任务可以响应停止信号
+        """Signals the generation task to stop and cleans up resources."""
         if self._task and not self._task.done():
+            self._stop_event.set()
+            self._pause_event.set()  # Unblock the loop if it's paused
             try:
+                # Wait gracefully for the task to finish
                 await asyncio.wait_for(self._task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
-                self._task.cancel()
+                self._task.cancel()  # Forcefully cancel if it doesn't stop
         self._done_event.set()
 
-    async def run(self):
+    def run(self):
+        """Starts or resumes the reasoning loop."""
         if self._task is None or self._task.done():
-            # 如果任务已完成或被取消，需要重新创建
+            # Recreate the task if it has been destroyed or finished
             self._done_event.clear()
             self._stop_event.clear()
             self._task = asyncio.create_task(self._run_loop())
         self._pause_event.set()
 
-    async def pause(self):
+    def pause(self):
+        """Pauses the reasoning loop after the current token is generated."""
         self._pause_event.clear()
 
-    # -------- 内部辅助方法 --------
+    # --------------------------------------------------------------------------
+    # Internal Helper Methods
+    # --------------------------------------------------------------------------
+
     async def _ensure_model(self):
+        """
+        Loads the model and tokenizer on the first call, running the blocking
+        I/O operations in a separate thread to avoid blocking the asyncio event loop.
+        """
         if self._model and self._tokenizer:
             return
 
-        def _load_model_and_tokenizer():
+        def _load_from_pretrained():
+            """Synchronous loading function to be run in a thread."""
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 torch_dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
-                device_map=("auto" if torch.cuda.is_available() else None),
+                device_map=("auto" if torch.cuda.is_available() else "cpu"),
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
+            self._generation_config.pad_token_id = tokenizer.pad_token_id
+            self._generation_config.eos_token_id = tokenizer.eos_token_id
             return model, tokenizer
 
-        # 在单独的线程中执行阻塞的加载操作
-        self._model, self._tokenizer = await asyncio.to_thread(_load_model_and_tokenizer)
-        self._eos_id = self._tokenizer.eos_token_id
+        self._model, self._tokenizer = await asyncio.to_thread(_load_from_pretrained)
         self._device = self._model.device
         self._model.eval()
 
     async def _run_loop(self):
+        """The main generation loop."""
         try:
             await self._ensure_model()
 
+            # Initialize with the current context.
             input_ids = self._tokenizer.encode(self._context, return_tensors="pt").to(self._device)
             past_key_values = None
+            attention_mask = torch.ones_like(input_ids)
 
             while not self._stop_event.is_set():
                 await self._pause_event.wait()
                 if self._stop_event.is_set():
                     break
 
-                # 1. 处理挂起的外部插入
-                input_ids, past_key_values = await self._process_pending_inserts(input_ids, past_key_values)
+                # --- Step 1: Process any pending text insertions ---
+                input_ids, past_key_values, attention_mask = await self._process_pending_inserts(
+                    input_ids, past_key_values, attention_mask
+                )
 
-                # 2. 如果没有新的输入，则生成下一个 token
-                if input_ids.shape[1] > 0:
-                    with torch.no_grad():
-                        outputs = self._model(input_ids=input_ids, use_cache=True, past_key_values=past_key_values)
-                        past_key_values = outputs.past_key_values
-
-                        # 使用 generation_config 进行采样
-                        next_token_logits = outputs.logits[:, -1, :]
-                        next_tokens = torch.multinomial(torch.softmax(next_token_logits, dim=-1), num_samples=1)
-                else:  # 如果没有新输入，暂停直到有新的 insert
-                    await self.pause()
+                if input_ids.shape[1] == 0:
+                    # If there's nothing to process, pause until new input arrives.
+                    self.pause()
                     continue
 
-                # 3. 处理新生成的 token
-                new_text = self._tokenizer.decode(next_tokens[0], skip_special_tokens=True)
+                # --- Step 2: Generate the next token ---
+                with torch.no_grad():
+                    outputs = self._model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                    )
+                    next_token_logits = outputs.logits[:, -1, :]
+                    past_key_values = outputs.past_key_values
+
+                    # Apply sampling strategy
+                    if self._generation_config.do_sample:
+                        probs = torch.softmax(next_token_logits / self._generation_config.temperature, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1)
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+
+                # --- Step 3: Decode, append, and emit the new token ---
+                new_text = self._tokenizer.decode(next_token[0], skip_special_tokens=True)
                 if new_text:
                     async with self._lock:
                         self._context += new_text
                     await self._emit(new_text)
 
-                input_ids = next_tokens
+                # --- Step 4: Check for and execute tool calls ---
+                tool_result_ids = await self._process_tool_call_if_detected()
+                if tool_result_ids:
+                    # If a tool was called, its result becomes the next input.
+                    input_ids = torch.cat([next_token, tool_result_ids], dim=1)
+                else:
+                    # Otherwise, the generated token is the next input.
+                    input_ids = next_token
 
-                # 4. 检测并执行工具调用
-                tool_result_text = await self._process_tool_call_if_detected()
-                if tool_result_text:
-                    tool_result_ids = self._tokenizer.encode(tool_result_text, return_tensors="pt").to(self._device)
-                    input_ids = torch.cat([input_ids, tool_result_ids], dim=1)
+                attention_mask = torch.ones_like(input_ids)
 
-                # 5. 检查是否生成结束
-                if self._eos_id is not None and next_tokens.item() == self._eos_id:
+                # --- Step 5: Check for End-Of-Sequence token ---
+                if self._generation_config.eos_token_id is not None and next_token.item() == self._generation_config.eos_token_id:
                     break
 
-        except (asyncio.CancelledError, Exception) as e:
-            await self._emit(f"[adapter-error]{type(e).__name__}: {e}")
+        except Exception as e:
+            error_msg = f"[adapter-error]{type(e).__name__}: {e}"
+            await self._emit(error_msg)
             if not isinstance(e, asyncio.CancelledError):
+                # Re-raise unexpected errors
                 raise
         finally:
             self._done_event.set()
 
-    async def _process_pending_inserts(self, all_ids, past_key_values):
-        """处理所有待处理的插入，并更新 input_ids 和 past_key_values。"""
+    async def _process_pending_inserts(self, input_ids, past_key_values, attention_mask):
+        """Drains the insert queue and prepares the new input tensors for the model."""
+        if self._pending_inserts.empty():
+            return input_ids, past_key_values, attention_mask
+
         insert_text = ""
         while not self._pending_inserts.empty():
-            insert_text += await self._pending_inserts.get()
+            insert_text += self._pending_inserts.get_nowait()
             self._pending_inserts.task_done()
 
-        if insert_text:
-            insert_ids = self._tokenizer.encode(insert_text, return_tensors="pt").to(self._device)
-            # 当有外部输入时，为了简单起见，我们不使用 past_key_values，而是重新处理整个上下文。
-            # 这是一个权衡：简化了逻辑，但可能牺牲了一些性能。
-            # 对于需要高性能的场景，可以实现更复杂的kv-cache拼接逻辑。
-            all_text_ids = self._tokenizer.encode(self._context, return_tensors="pt").to(self._device)
-            return all_text_ids, None
+        # When external text is inserted, it's safest to invalidate the KV cache
+        # and re-process the entire context to ensure correctness. This is a
+        # trade-off between performance and logical simplicity.
+        new_input_ids = self._tokenizer.encode(self._context, return_tensors="pt").to(self._device)
+        new_attention_mask = torch.ones_like(new_input_ids)
+        return new_input_ids, None, new_attention_mask
 
-        return all_ids, past_key_values
+    async def _process_tool_call_if_detected(self) -> Optional[torch.Tensor]:
+        """
+        Checks for a tool call at the end of the context. If found, executes it
+        and returns the encoded result as a tensor to be fed back to the model.
+        """
+        context_before = self.context
+        was_executed = await super()._detect_and_execute_tool_tail()
 
-    async def _process_tool_call_if_detected(self) -> Optional[str]:
-        """检测并执行工具调用，返回结果文本供模型继续处理。"""
-        if await self._detect_and_execute_tool_tail():
-            # _detect_and_execute_tool_tail 已经将结果追加到 self._context 并 emit
-            # 我们只需要获取这个结果文本，以便编码并送入下一次模型推理
-            # 这里我们假设追加的文本就是最新的工具调用结果
-            # 注意：_detect_and_execute_tool_tail 内部需要返回追加的文本
-            # 我们需要稍微修改基类 _adapter.py
-
-            # 假设 _detect_and_execute_tool_tail 返回 (bool, Optional[str])
-            executed, result_text = await self._detect_and_execute_tool_tail_modified()
-            if executed:
-                return result_text
+        if was_executed:
+            # The base method updated self.context and emitted the result.
+            # We calculate the delta to feed it back into the model.
+            newly_added_text = self.context[len(context_before):]
+            if newly_added_text:
+                return self._tokenizer.encode(newly_added_text, return_tensors="pt").to(self._device)
         return None
-
-    # 你需要稍微修改基类 `_adapter.py` 中的 `_detect_and_execute_tool_tail`
-    # 让它返回追加的文本。例如：
-    async def _detect_and_execute_tool_tail_modified(self) -> tuple[bool, Optional[str]]:
-        # ... (检测逻辑不变)
-        try:
-            result = await router._execute(tag_text)
-            # ... (处理 result 的逻辑不变)
-            appended = "..."  # 这是计算出的结果字符串
-            self._context += appended
-            await self._emit(appended)
-            return True, appended
-        except Exception as e:
-            # ... (错误处理逻辑不变)
-            return False, None
-
-    # 为保持兼容，你可以在这个文件中重写基类方法，而不是修改基类文件
-    async def _detect_and_execute_tool_tail(self) -> bool:
-        executed, _ = await self._detect_and_execute_tool_tail_modified()
-        return executed
