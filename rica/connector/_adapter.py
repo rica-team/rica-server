@@ -4,6 +4,8 @@ import re
 from typing import Any, Callable, List, Optional
 
 from .. import router
+from ..server import RiCA
+
 
 __all__ = ["_ReasoningThreadTemplate"]
 
@@ -16,14 +18,24 @@ class _ReasoningThreadTemplate:
     - Managing a textual context buffer.
     - Registering callbacks via trigger and emitting incremental pieces via _emit.
     - Detecting and executing <rica ...>...</rica> tool calls appended at the tail
-      of the context by delegating to router._execute.
+      of the context by delegating to the provided RiCA application instance.
 
     Subclasses should implement model-specific generation and lifecycle methods
     (insert/wait/run/pause/destroy), calling _emit for each new piece of text and
     optionally using _detect_and_execute_tool_tail inside their generation loop.
     """
 
-    def __init__(self, context: str = ""):
+    def __init__(self, app: RiCA, context: str = ""):
+        """
+        Initializes the reasoning thread template.
+
+        Args:
+            app: The RiCA application instance containing tool definitions.
+            context: The initial context string.
+        """
+        if not isinstance(app, RiCA):
+            raise TypeError("The 'app' argument must be an instance of RiCA.")
+        self._app: RiCA = app
         self._context: str = context or ""
         self._callbacks: List[Callable[[str], Any]] = []
 
@@ -40,11 +52,11 @@ class _ReasoningThreadTemplate:
         """Stop and clean up resources (to be implemented)."""
         raise NotImplementedError
 
-    async def run(self):
+    def run(self):
         """Start or resume reasoning (to be implemented)."""
         raise NotImplementedError
 
-    async def pause(self):
+    def pause(self):
         """Pause reasoning (to be implemented)."""
         raise NotImplementedError
 
@@ -88,49 +100,55 @@ class _ReasoningThreadTemplate:
         """Emit a new piece of text to all registered callbacks."""
         if not piece:
             return
-        for cb in list(self._callbacks):
+        # Create tasks for all callbacks to run concurrently
+        tasks = []
+        for cb in self._callbacks:
             if asyncio.iscoroutinefunction(cb):
-                asyncio.create_task(cb(piece))
+                tasks.append(asyncio.create_task(cb(piece)))
             else:
-                asyncio.create_task(asyncio.to_thread(cb, piece))
+                tasks.append(asyncio.create_task(asyncio.to_thread(cb, piece)))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
 
     async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
         """
         Detect a trailing <rica ...>...</rica> in the current context, execute it
-        via router._execute, append the result to the context, and emit it.
+        via the configured RiCA app, append the result to the context, and emit it.
 
-        Returns True if a tool call was detected and executed.
+        Returns:
+            A tuple containing:
+            - bool: True if a tool call was detected and executed.
+            - Optional[str]: The text that was appended to the context as a result.
         """
-        tail = self._context[-400:]
-        pattern = r"<rica\s+[^>]*>.*?</rica>$"
-        m = re.search(pattern, tail, re.DOTALL)
-        if not m:
+        # A more robust regex to find the last complete <rica> tag.
+        # It looks for <rica ...> that is not followed by another <rica ...>
+        pattern = r"<rica\s+[^>]*>.*?</rica>(?!.*<rica\s+[^>]*>.*?</rica>)"
+        match = re.search(pattern, self._context, re.DOTALL)
+
+        if not match:
             return False, None
 
-        # Extract the full last tag from the entire context to ensure complete content
-        last = None
-        for match in re.finditer(r"<rica\s+[^>]*>.*?</rica>", self._context, re.DOTALL):
-            last = match
-        if not last:
-            return False
-        tag_text = self._context[last.start() : last.end()]
+        tag_text = match.group(0)
 
         try:
-            result = await router._execute(tag_text)
+            result = await router.execute_tool_call(self._app, tag_text)
             appended: str
-            if hasattr(result, "callback"):
+            if isinstance(result, CallBack):
                 payload = result.callback
                 if isinstance(payload, (dict, list)):
                     appended = json.dumps(payload, ensure_ascii=False)
                 else:
                     appended = str(payload)
             else:
-                # UUID or other object
+                # It's a UUID for a background call
                 appended = json.dumps({"call_id": str(result)}, ensure_ascii=False)
 
             self._context += appended
             await self._emit(appended)
             return True, appended
         except Exception as e:
-            await self._emit(f"[tool-error]{type(e).__name__}: {e}")
+            error_message = f"[tool-error]{type(e).__name__}: {e}"
+            self._context += error_message
+            await self._emit(error_message)
             return False, None

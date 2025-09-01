@@ -1,5 +1,6 @@
 """Custom exceptions for RiCA Server."""
 
+
 class PackageInvalidError(ValueError):
     """Raised when a package name is syntactically invalid."""
 

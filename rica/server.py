@@ -7,7 +7,7 @@ provided functions are wrapped into async callables when registered.
 import asyncio
 import functools
 from uuid import UUID
-from typing import Callable, Any
+from typing import Callable, Any, Optional
 
 from .exceptions import *
 
@@ -94,6 +94,13 @@ class RiCA:
 
             bound_method = getattr(self, name)
             self.endpoints.append(Application(package, bound_method, background, timeout))
+
+    def find_endpoint(self, package_name: str) -> Optional[Application]:
+        """Finds a registered application endpoint by its package name."""
+        for endpoint in self.endpoints:
+            if endpoint.package == package_name:
+                return endpoint
+        return None
 
     def register(self, package: str, background: bool = True, timeout: int = -1) -> Callable[
         [Callable[..., Any]], Callable[..., Any]]:
