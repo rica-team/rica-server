@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from ..exceptions import AdapterDependenciesImportError
 from ..server import RiCA
+from ..utils.prompt import _rica_prompt
 from ._adapter import _ReasoningThreadTemplate
 
 try:
@@ -24,7 +25,7 @@ except ImportError:
         "The transformers adapter requires 'transformers' and 'torch' to be installed."
     )
 
-default_model_name = "google/gemma-2-2b-it"
+default_model_name = "google/gemma-3-1b-it"
 
 
 class _ToolCallStoppingCriteria(StoppingCriteria):
@@ -34,9 +35,7 @@ class _ToolCallStoppingCriteria(StoppingCriteria):
         self.tokenizer = tokenizer
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        # Decode the entire generated sequence
         full_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-        # Check if a complete tool call tag exists at the end of the text
         if full_text.rstrip().endswith("</rica>"):
             return True
         return False
@@ -46,10 +45,6 @@ class ReasoningThread(_ReasoningThreadTemplate):
     """
     A reasoning thread based on Hugging Face Transformers that supports a token-by-token
     generation loop with real-time text insertion and tool-call execution.
-
-    This implementation leverages the `model.generate` method with a `TextIteratorStreamer`
-    for efficient, non-blocking token generation, and a custom `StoppingCriteria` to
-    interrupt generation upon detecting a complete tool call.
     """
 
     def __init__(
@@ -61,24 +56,22 @@ class ReasoningThread(_ReasoningThreadTemplate):
     ):
         super().__init__(app, context)
         self.model_name: str = model_name
+        self.model_modal: str = "PyTorch/Transformers"
 
-        # --- Runtime State ---
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._prompt_injected = False
 
-        # --- Control Events ---
         self._pause_event = asyncio.Event()
         self._stop_event = asyncio.Event()
         self._is_running = False
-        self._pause_event.set()  # Start in a running state
+        self._pause_event.set()
 
-        # --- Model & Tokenizer (lazy-loaded) ---
         self._model: Optional[AutoModelForCausalLM] = None
         self._tokenizer: Optional[AutoTokenizer] = None
         self._streamer: Optional[TextIteratorStreamer] = None
         self._stopping_criteria: Optional[StoppingCriteriaList] = None
 
-        # --- Generation Configuration ---
         default_config = {"max_new_tokens": 1024, "do_sample": True, "temperature": 0.6, "top_p": 0.9}
         if generation_config:
             default_config.update(generation_config)
@@ -89,40 +82,33 @@ class ReasoningThread(_ReasoningThreadTemplate):
     # --------------------------------------------------------------------------
 
     async def insert(self, text: Any):
-        """
-        Inserts external text into the context. This will pause any ongoing generation,
-        append the text, and then resume generation from the new context.
-        """
         if text is None:
             return
-        s = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
 
-        # Pause generation to safely modify the context
+        s = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+        formatted_input = f'<rica-callback package="rica.userinput">{s}</rica-callback>'
+
         self.pause()
         async with self._lock:
-            self._context += s
-        await self._emit(s)
+            self._context += formatted_input
+        await self._emit_token(formatted_input)
 
-        # Resume generation, which will now use the updated context
         self.run()
 
     async def wait(self):
-        """Waits until the main reasoning task is complete or stopped."""
         if self._task and not self._task.done():
             await self._task
 
     async def destroy(self):
-        """Signals the generation task to stop and cleans up resources."""
         if self._task and not self._task.done():
             self._stop_event.set()
-            self._pause_event.set()  # Unblock if paused
+            self._pause_event.set()
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 self._task.cancel()
 
     def run(self):
-        """Starts or resumes the reasoning loop."""
         self._pause_event.set()
         if not self._is_running:
             self._is_running = True
@@ -130,20 +116,28 @@ class ReasoningThread(_ReasoningThreadTemplate):
             self._task = asyncio.create_task(self._run_loop())
 
     def pause(self):
-        """Pauses the reasoning loop before the next generation cycle."""
         self._pause_event.clear()
 
     # --------------------------------------------------------------------------
     # Internal Helper Methods
     # --------------------------------------------------------------------------
 
+    def _get_next_token_from_streamer(self) -> Optional[str]:
+        """
+        Synchronous helper to safely get the next token from the streamer.
+        It catches StopIteration and returns None, preventing the exception
+        from propagating into the asyncio event loop.
+        """
+        try:
+            return next(self._streamer)
+        except StopIteration:
+            return None
+
     async def _ensure_model(self):
-        """Loads the model and tokenizer on the first call in a separate thread."""
         if self._model and self._tokenizer:
             return
 
         def _load_sync():
-            """Synchronous loading function to be run in a thread."""
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
@@ -159,8 +153,17 @@ class ReasoningThread(_ReasoningThreadTemplate):
         self._stopping_criteria = StoppingCriteriaList([_ToolCallStoppingCriteria(self._tokenizer)])
         self._model.eval()
 
+    async def _inject_prompt_if_needed(self):
+        if self._prompt_injected:
+            return
+
+        async with self._lock:
+            system_prompt = await _rica_prompt(self._app, self.model_name, self.model_modal)
+            self._context = system_prompt + self._context
+            self._prompt_injected = True
+            print("--- System Prompt Injected ---")
+
     async def _run_loop(self):
-        """The main generation loop."""
         try:
             await self._ensure_model()
 
@@ -169,11 +172,11 @@ class ReasoningThread(_ReasoningThreadTemplate):
                 if self._stop_event.is_set():
                     break
 
-                # --- Step 1: Prepare inputs for generation ---
+                await self._inject_prompt_if_needed()
+
                 async with self._lock:
                     inputs = self._tokenizer(self._context, return_tensors="pt").to(self._model.device)
 
-                # --- Step 2: Start generation in a separate thread ---
                 generation_kwargs = {
                     "input_ids": inputs["input_ids"],
                     "attention_mask": inputs["attention_mask"],
@@ -184,31 +187,30 @@ class ReasoningThread(_ReasoningThreadTemplate):
                 thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
                 thread.start()
 
-                # --- Step 3: Stream generated tokens and update context ---
-                async for new_text in self._streamer:
+                while True:
+                    # Use the safe wrapper function with to_thread
+                    new_text = await asyncio.to_thread(self._get_next_token_from_streamer)
+
+                    if new_text is None:
+                        # None indicates StopIteration was caught, so generation is finished.
+                        break
+
                     if self._stop_event.is_set() or not self._pause_event.is_set():
-                        # If stopped or paused externally, break the streaming loop
-                        # Note: The underlying generate call will continue until it finishes.
-                        # A more advanced implementation might need a way to signal it to stop.
                         break
 
                     async with self._lock:
                         self._context += new_text
-                    await self._emit(new_text)
+                    await self._emit_token(new_text)
 
-                # Wait for the generation thread to finish
                 await asyncio.to_thread(thread.join)
 
-                # --- Step 4: Check for and execute tool calls ---
                 was_executed, _ = await self._detect_and_execute_tool_tail()
                 if not was_executed:
-                    # If no tool was called, it means generation ended naturally (EOS or max_tokens).
-                    # We can pause here until new input arrives.
                     self.pause()
 
         except Exception as e:
             error_msg = f"[adapter-error]{type(e).__name__}: {e}"
-            await self._emit(error_msg)
+            await self._emit_token(error_msg)
             if not isinstance(e, asyncio.CancelledError):
                 raise
         finally:
