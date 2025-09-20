@@ -32,7 +32,7 @@ async def _sys_python_exec(input_):
 
 
 # 3. Create the ReasoningThread, passing the app instance to it.
-rt = tf.TransformersReasoningThread(model_name="gpt2")
+rt = tf.TransformersReasoningThread(model_name="google/gemma-3-1b-it")
 
 
 # 4. Register callbacks.
