@@ -5,11 +5,11 @@ from rica.connector import transformers_adapter as tf
 from rica.server import RiCA
 
 # 1. Create the RiCA application instance first.
-app = RiCA()
+app = RiCA("demo.sys")
 
 
 # 2. Register tools with the application instance.
-@app.register("sys.python.exec", background=False, timeout=5000)
+@app.route("/exec", background=False, timeout=5000)
 async def _sys_python_exec(input_):
     """
     A tool to execute a single line of Python code.
@@ -32,7 +32,7 @@ async def _sys_python_exec(input_):
 
 
 # 3. Create the ReasoningThread, passing the app instance to it.
-rt = tf.ReasoningThread(app, model_name="google/gemma-3-1b-it")
+rt = tf.TransformersReasoningThread(model_name="gpt2")
 
 
 # 4. Register callbacks.
@@ -63,12 +63,14 @@ async def main():
 
     # 5. Start the reasoning thread. It will initialize the model and wait for input.
     # The `run()` call here is important to start the loop, even before first insert.
+    await rt.initialize()
+    await rt.install(app)
     rt.run()
     # Initially, it will pause itself waiting for input.
 
     # 6. Insert the initial user prompt. The adapter will format it correctly.
     await rt.insert(
-        "Please calculate 123*456 using sys.python.exec. "
+        "Please calculate 123*456 using demo.sys/exec. "
         "Think step-by-step about what you need to do, and then use the "
         "rica.response tool to give me the final answer."
     )
