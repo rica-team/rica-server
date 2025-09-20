@@ -1,3 +1,4 @@
+from typing import Dict
 from ..server import RiCA
 
 prompt_1 = \
@@ -16,36 +17,29 @@ Here are the tools you can use:"""
 
 prompt_4 = """Here is the guidance to call a tool:
 
-For example, when you want to call the tool `rica.response` to send a message to the user, you can call it like this:
-<rica package="rica.response">[{"type":"text","content":"Hello, world!"}]</rica>
-For a long-time tool like execution, you can specifically call it with background and timeout (in ms) options:
-<rica package="rica.response" background="true" timeout="10000">[{"type":"text","content":"Hello, world!"}]</rica>
+The tools are defined in a nested structure. First you have the application, then the route within that application.
 
-For a non-background tool, you will got the result immediately like:
-<rica-callback>{"status":"success"}</rica-callback>
-or a error caused like:
-<rica-callback>{"status":"error","error":"Something went wrong."}</rica-callback>
+For example, to call the `/exec` route from the `com.example.pyexec` application, you would write:
+<rica package="com.example.pyexec" route="/exec">{\"code\": \"1+1\"}</rica>
 
-For a background tool, your calling will be modified with a uuid like:
-<rica package="rica.response" callid="1234-xxxx-7890">[{"type":"text","content":"Hello, world!"}]</rica>
-and you will got a callback like:
-<rica-callback callid="1234-xxxx-7890">{"status":"success"}</rica-callback>
+The definitions show which routes can be run in the background and their timeouts.
+"""
 
-For better experience, it's recommended to think before give the response and for less waiting time, for a long-tim""" \
-"""e reasoning, you can generate responses in steps. If you generate text out of response block, it can be recogniz""" \
-"""ed as reasoning context and will be not shown to user. It's recommended to generate a response block on the begi""" \
-"""nning of a long-time reasoning and even a response block generated, you can still generate in continuous. On the""" \
-""" same time you generated a response block, it will be shown to the user even the whole generation is not finished."""
+async def _rica_prompt(apps: Dict[str, RiCA], model_name:str, model_modal:str):
+    tools_text = ""
+    for package_name, app in apps.items():
+        app_desc = app.description or ""
+        tools_text += f'<app package="{package_name}" description="{app_desc}">\n'
 
-async def _rica_prompt(app:RiCA, model_name:str, model_modal:str):
-    tools_text = "\n".join([
-        f"<tool>\n"
-        f"    <package>{endpoint.package}</package>\n"
-        f"    <background>{str(endpoint.background)}</background>\n"
-        f"    <timeout>{endpoint.timeout}</timeout>\n"
-        f"    <description>{endpoint.function.__doc__ or ''}</description>\n"
-        f"</tool>"
-        for endpoint in app.endpoints
-    ])
+        for route in app.routes:
+            route_desc = route.function.__doc__ or ''
+            tools_text += f'  <route path="{route.route}">\n'
+            tools_text += f'    <description>{route_desc}</description>\n'
+            tools_text += f'    <background>{str(route.background)}</background>\n'
+            if route.background:
+                tools_text += f'    <timeout>{route.timeout}</timeout>\n'
+            tools_text += f'  </route>\n'
+
+        tools_text += f'</app>\n'
 
     return prompt_1 + model_name + prompt_2 + model_modal + prompt_3 + tools_text + prompt_4

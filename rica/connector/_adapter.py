@@ -1,43 +1,60 @@
 import asyncio
 import json
 import re
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Dict
+from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from .. import router
-from ..exceptions import InvalidRiCAString
-from ..server import CallBack, RiCA
+from ..exceptions import *
+from ..server import CallBack, RiCA, Application
 
-__all__ = ["_ReasoningThreadTemplate"]
+__all__ = ["ReasoningThread"]
 
 
-class _ReasoningThreadTemplate:
+class ReasoningThread:
     """
     Base template for reasoning adapters.
 
     This class provides reusable, framework-agnostic helpers for:
     - Managing a textual context buffer.
+    - Managing a collection of RiCA applications.
     - Registering two types of callbacks:
       - @token_generated: Receives every raw token from the model.
-      - @trigger: Receives only the payload from a `rica.response` tool call.
-    - Detecting and executing <rica ...>...</rica> tool calls, with special
-      handling for `rica.response`.
+      - @trigger: Receives only the payload from a rica.response tool call.
+    - Detecting and executing <rica ...>...</rica> tool calls.
     """
 
-    def __init__(self, app: RiCA, context: str = ""):
+    def __init__(self, context: str = ""):
         """
-        Initializes the reasoning thread template.
+        Initializes the reasoning thread.
 
         Args:
-            app: The RiCA application instance containing tool definitions.
             context: The initial context string.
         """
-        if not isinstance(app, RiCA):
-            raise TypeError("The 'app' argument must be an instance of RiCA.")
-        self._app: RiCA = app
+        self._apps: Dict[str, RiCA] = {}
+        self._apps_lock = asyncio.Lock()
         self._context: str = context or ""
         self._response_callbacks: List[Callable[[Any], Any]] = []  # For @trigger
         self._token_callbacks: List[Callable[[str], Any]] = []  # For @token_generated
+
+        # Install the virtual 'rica' app for system prompts
+        self.install(RiCA("rica"))
+
+    async def install(self, app: RiCA):
+        """Installs a RiCA application."""
+        if not isinstance(app, RiCA):
+            raise TypeError("The 'app' argument must be an instance of RiCA.")
+        async with self._apps_lock:
+            if app.package in self._apps:
+                raise PackageExistError(f"Application with package '{app.package}' is already installed.")
+            self._apps[app.package] = app
+
+    async def uninstall(self, package_name: str):
+        """Uninstalls a RiCA application by its package name."""
+        async with self._apps_lock:
+            if package_name not in self._apps:
+                raise PackageNotFoundError(f"Application with package '{package_name}' not found.")
+            del self._apps[package_name]
 
     # ---- Lifecycle placeholders (to be implemented by subclasses) ----
     async def insert(self, text: Any):
@@ -86,15 +103,8 @@ class _ReasoningThreadTemplate:
         """Emit a final response payload to all @trigger callbacks."""
         if not payload:
             return
-
-        tasks = []
-        for cb in self._response_callbacks:
-            if asyncio.iscoroutinefunction(cb):
-                tasks.append(asyncio.create_task(cb(payload)))
-            else:
-                # Wrap sync function in to_thread to avoid blocking
-                tasks.append(asyncio.create_task(asyncio.to_thread(cb, payload)))
-
+        tasks = [asyncio.create_task(cb(payload)) for cb in self._response_callbacks if asyncio.iscoroutinefunction(cb)]
+        tasks.extend([asyncio.create_task(asyncio.to_thread(cb, payload)) for cb in self._response_callbacks if not asyncio.iscoroutinefunction(cb)])
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -102,77 +112,85 @@ class _ReasoningThreadTemplate:
         """Emit a raw generated token to all @token_generated callbacks."""
         if not piece:
             return
-
-        tasks = []
-        for cb in self._token_callbacks:
-            if asyncio.iscoroutinefunction(cb):
-                tasks.append(asyncio.create_task(cb(piece)))
-            else:
-                # Wrap sync function in to_thread to avoid blocking
-                tasks.append(asyncio.create_task(asyncio.to_thread(cb, piece)))
-
+        tasks = [asyncio.create_task(cb(piece)) for cb in self._token_callbacks if asyncio.iscoroutinefunction(cb)]
+        tasks.extend([asyncio.create_task(asyncio.to_thread(cb, piece)) for cb in self._token_callbacks if not asyncio.iscoroutinefunction(cb)])
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
-        """
-        Detect a trailing <rica ...>...</rica> in the current context, execute it
-        via the configured RiCA app, append the result to the context, and emit it.
-        Special handling for `rica.response` which triggers response callbacks instead.
+    async def _execute_tool_call(self, app: Application, data: list | dict):
+        """Execute a registered function."""
+        function = app.function
+        timeout = app.timeout
+        background = app.background
 
-        Returns:
-            A tuple containing:
-            - bool: True if a tool call was detected and handled.
-            - Optional[str]: The text that was appended to the context as a result.
-        """
+        if not asyncio.iscoroutinefunction(function):
+            function = asyncio.to_thread(functools.partial(function, data))
+        else:
+            function = function(data)
+
+        if background:
+            call_id = uuid4()
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(function, name=str(call_id))
+            if timeout > 0:
+                cancel_handle = loop.call_later(timeout / 1000, task.cancel)
+                task.add_done_callback(lambda _: cancel_handle.cancel())
+            return call_id
+        else:
+            try:
+                result = await asyncio.wait_for(function, timeout / 1000) if timeout > 0 else await function
+                return CallBack(package=app.route, call_id=uuid4(), callback=result)
+            except asyncio.TimeoutError as e:
+                raise ExecutionTimedOut from e
+            except Exception as e:
+                raise UnexpectedExecutionError(str(e)) from e
+
+    async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
+        """Detect and execute a trailing <rica ...>...</rica> in the context."""
         pattern = r"<rica\s+[^>]*>.*?<\/rica>(?!.*<rica\s+[^>]*>.*?<\/rica>)"
         match = re.search(pattern, self._context, re.DOTALL | re.IGNORECASE)
-
         if not match:
             return False, None
 
         tag_text = match.group(0)
-
         try:
-            # Use a simple XML parser to robustly get attributes and content
-            # A more robust solution would handle potential malformed XML from the LLM
             parser = ET.XMLParser(target=ET.TreeBuilder())
-            # Wrap in a dummy root tag to handle multiple root elements or text nodes
             parser.feed(f"<root>{tag_text}</root>")
-            root = parser.close()[0]  # Get the original <rica> tag
+            root = parser.close()[0]
 
             package_name = root.attrib.get("package")
-            if not package_name:
-                raise InvalidRiCAString("Missing 'package' attribute in <rica> tag.")
+            route_name = root.attrib.get("route")
+            if not package_name or not route_name:
+                raise InvalidRiCAString("Missing 'package' or 'route' attribute in <rica> tag.")
 
             content_str = root.text or ""
             content = json.loads(content_str) if content_str.strip() else {}
 
-            # --- Special handling for rica.response ---
-            if package_name == "rica.response":
+            async with self._apps_lock:
+                app_instance = self._apps.get(package_name)
+                if not app_instance:
+                    raise PackageNotFoundError(f"Package '{package_name}' not found.")
+
+                application = app_instance.find_route(route_name)
+                if not application:
+                    raise RouteNotFoundError(f"Route '{route_name}' not found in package '{package_name}'.")
+
+            # Special handling for rica.response, now part of the virtual 'rica' app
+            if package_name == "rica" and route_name == "/response":
                 await self._emit_response(content)
-                # The response tool does not return anything to the context.
-                # It's a terminal action for the user.
                 return True, None
 
-            # --- For all other tools ---
-            # Re-use the original tag_text for decoding to preserve exact formatting
-            application, data = router._decode(self._app, tag_text)
-            result = await router._call(application, data)
+            result = await self._execute_tool_call(application, content)
 
             appended: str
             if isinstance(result, CallBack):
                 payload = result.callback
-                if isinstance(payload, (dict, list)):
-                    appended = json.dumps(payload, ensure_ascii=False)
-                else:
-                    appended = str(payload)
-            else:
-                # It's a UUID for a background call
+                appended = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            else: # UUID
                 appended = json.dumps({"call_id": str(result)}, ensure_ascii=False)
 
             self._context += appended
-            await self._emit_token(appended)  # Emit the tool result as part of the thinking stream
+            await self._emit_token(appended)
             return True, appended
         except Exception as e:
             error_message = f"[tool-error]{type(e).__name__}: {e}"

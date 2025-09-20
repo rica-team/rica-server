@@ -9,12 +9,16 @@ class PackageExistError(ValueError):
     """Raised when attempting to register a package that already exists."""
 
 
+class RouteExistError(ValueError):
+    """Raised when attempting to register a route that already exists in a package."""
+
+
+class RouteNotFoundError(ValueError):
+    """Raised when a requested route cannot befound in the package."""
+
+
 class PackageNotFoundError(ValueError):
     """Raised when a requested package cannot be found in the registry."""
-
-
-class PackageDuplicateError(ValueError):
-    """Raised when duplicate packages are detected while concatenating servers."""
 
 
 class ExecutionTimedOut(Exception):
