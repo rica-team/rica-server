@@ -15,9 +15,9 @@ try:
         AutoModelForCausalLM,
         AutoTokenizer,
         GenerationConfig,
-        TextIteratorStreamer,
         StoppingCriteria,
         StoppingCriteriaList,
+        TextIteratorStreamer,
     )
 except ImportError:
     raise AdapterDependenciesImportError(
@@ -47,10 +47,10 @@ class TransformersReasoningThread(ReasoningThread):
     """
 
     def __init__(
-            self,
-            context: str = "",
-            model_name: str = default_model_name,
-            generation_config: Optional[Dict[str, Any]] = None,
+        self,
+        context: str = "",
+        model_name: str = default_model_name,
+        generation_config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(context)
         self.model_name: str = model_name
@@ -70,7 +70,12 @@ class TransformersReasoningThread(ReasoningThread):
         self._streamer: Optional[TextIteratorStreamer] = None
         self._stopping_criteria: Optional[StoppingCriteriaList] = None
 
-        default_config = {"max_new_tokens": 1024, "do_sample": True, "temperature": 0.6, "top_p": 0.9}
+        default_config = {
+            "max_new_tokens": 1024,
+            "do_sample": True,
+            "temperature": 0.6,
+            "top_p": 0.9,
+        }
         if generation_config:
             default_config.update(generation_config)
         self._generation_config = GenerationConfig(**default_config)
@@ -147,7 +152,9 @@ class TransformersReasoningThread(ReasoningThread):
             return model, tokenizer
 
         self._model, self._tokenizer = await asyncio.to_thread(_load_sync)
-        self._streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
+        self._streamer = TextIteratorStreamer(
+            self._tokenizer, skip_prompt=True, skip_special_tokens=True
+        )
         self._stopping_criteria = StoppingCriteriaList([_ToolCallStoppingCriteria(self._tokenizer)])
         self._model.eval()
 
@@ -175,7 +182,9 @@ class TransformersReasoningThread(ReasoningThread):
                 await self._inject_prompt_if_needed()
 
                 async with self._lock:
-                    inputs = self._tokenizer(self._context, return_tensors="pt").to(self._model.device)
+                    inputs = self._tokenizer(self._context, return_tensors="pt").to(
+                        self._model.device
+                    )
 
                 generation_kwargs = {
                     "input_ids": inputs["input_ids"],

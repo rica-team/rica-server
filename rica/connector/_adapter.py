@@ -1,12 +1,20 @@
 import asyncio
+import functools
 import json
 import re
-from typing import Any, Callable, List, Optional, Dict
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from ..exceptions import *
-from ..server import CallBack, RiCA, Application
+from ..exceptions import (
+    ExecutionTimedOut,
+    InvalidRiCAString,
+    PackageExistError,
+    PackageNotFoundError,
+    RouteNotFoundError,
+    UnexpectedExecutionError,
+)
+from ..server import Application, CallBack, RiCA
 
 __all__ = ["ReasoningThread"]
 
@@ -46,7 +54,9 @@ class ReasoningThread:
             raise TypeError("The 'app' argument must be an instance of RiCA.")
         async with self._apps_lock:
             if app.package in self._apps:
-                raise PackageExistError(f"Application with package '{app.package}' is already installed.")
+                raise PackageExistError(
+                    f"Application with package '{app.package}' is already installed."
+                )
             self._apps[app.package] = app
 
     async def uninstall(self, package_name: str):
@@ -103,8 +113,18 @@ class ReasoningThread:
         """Emit a final response payload to all @trigger callbacks."""
         if not payload:
             return
-        tasks = [asyncio.create_task(cb(payload)) for cb in self._response_callbacks if asyncio.iscoroutinefunction(cb)]
-        tasks.extend([asyncio.create_task(asyncio.to_thread(cb, payload)) for cb in self._response_callbacks if not asyncio.iscoroutinefunction(cb)])
+        tasks = [
+            asyncio.create_task(cb(payload))
+            for cb in self._response_callbacks
+            if asyncio.iscoroutinefunction(cb)
+        ]
+        tasks.extend(
+            [
+                asyncio.create_task(asyncio.to_thread(cb, payload))
+                for cb in self._response_callbacks
+                if not asyncio.iscoroutinefunction(cb)
+            ]
+        )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -112,8 +132,18 @@ class ReasoningThread:
         """Emit a raw generated token to all @token_generated callbacks."""
         if not piece:
             return
-        tasks = [asyncio.create_task(cb(piece)) for cb in self._token_callbacks if asyncio.iscoroutinefunction(cb)]
-        tasks.extend([asyncio.create_task(asyncio.to_thread(cb, piece)) for cb in self._token_callbacks if not asyncio.iscoroutinefunction(cb)])
+        tasks = [
+            asyncio.create_task(cb(piece))
+            for cb in self._token_callbacks
+            if asyncio.iscoroutinefunction(cb)
+        ]
+        tasks.extend(
+            [
+                asyncio.create_task(asyncio.to_thread(cb, piece))
+                for cb in self._token_callbacks
+                if not asyncio.iscoroutinefunction(cb)
+            ]
+        )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -138,7 +168,11 @@ class ReasoningThread:
             return call_id
         else:
             try:
-                result = await asyncio.wait_for(function, timeout / 1000) if timeout > 0 else await function
+                result = (
+                    await asyncio.wait_for(function, timeout / 1000)
+                    if timeout > 0
+                    else await function
+                )
                 return CallBack(package=app.route, call_id=uuid4(), callback=result)
             except asyncio.TimeoutError as e:
                 raise ExecutionTimedOut from e
@@ -173,7 +207,9 @@ class ReasoningThread:
 
                 application = app_instance.find_route(route_name)
                 if not application:
-                    raise RouteNotFoundError(f"Route '{route_name}' not found in package '{package_name}'.")
+                    raise RouteNotFoundError(
+                        f"Route '{route_name}' not found in package '{package_name}'."
+                    )
 
             # Special handling for rica.response, now part of the virtual 'rica' app
             if package_name == "rica" and route_name == "/response":
@@ -185,8 +221,12 @@ class ReasoningThread:
             appended: str
             if isinstance(result, CallBack):
                 payload = result.callback
-                appended = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
-            else: # UUID
+                appended = (
+                    json.dumps(payload, ensure_ascii=False)
+                    if isinstance(payload, (dict, list))
+                    else str(payload)
+                )
+            else:  # UUID
                 appended = json.dumps({"call_id": str(result)}, ensure_ascii=False)
 
             self._context += appended

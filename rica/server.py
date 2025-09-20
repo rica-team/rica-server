@@ -4,13 +4,13 @@ Defines the RiCA class, route registration utilities, and simple Application
 and CallBack containers. Ensures packages are validated and that externally
 provided functions are wrapped into async callables when registered.
 """
+
 import asyncio
 import functools
+from typing import Any, Callable, Optional
 from uuid import UUID
-from typing import Callable, Any, Optional
 
-from .exceptions import *
-
+from .exceptions import PackageInvalidError, RouteExistError
 
 __all__ = ["RiCA", "Application", "CallBack"]
 
@@ -33,7 +33,7 @@ def _package_checker(package: str) -> bool:
             return False
         if not segment[0].isalpha():
             return False
-        if not all(c.isalnum() or c == '_' for c in segment):
+        if not all(c.isalnum() or c == "_" for c in segment):
             return False
 
     return True
@@ -79,25 +79,30 @@ class RiCA:
                 return route
         return None
 
-    def route(self, route_path: str, background: bool = True, timeout: int = -1) -> Callable[
-        [Callable[..., Any]], Callable[..., Any]]:
+    def route(
+        self, route_path: str, background: bool = True, timeout: int = -1
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a new endpoint (route) dynamically.
 
         Non-async functions are wrapped with asyncio.to_thread so they behave as async callables.
         """
         if self.find_route(route_path):
-            raise RouteExistError(f"Route '{route_path}' already exists in package '{self.package}'.")
+            raise RouteExistError(
+                f"Route '{route_path}' already exists in package '{self.package}'."
+            )
 
         def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
             self.routes.append(Application(route_path, function, background, timeout))
 
             if asyncio.iscoroutinefunction(function):
+
                 @functools.wraps(function)
                 async def wrapper(*args, **kwargs):
                     return await function(*args, **kwargs)
 
                 return wrapper
             else:
+
                 @functools.wraps(function)
                 async def wrapper(*args, **kwargs):
                     return await asyncio.to_thread(function, *args, **kwargs)

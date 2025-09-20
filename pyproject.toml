@@ -37,12 +37,6 @@ include = "\\.(py|pyi)$"
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-select = [
-  "E",  # pycodestyle errors
-  "F",  # pyflakes
-  "I",  # isort
-]
-ignore = []
 exclude = [
   ".git",
   ".venv",
@@ -50,3 +44,11 @@ exclude = [
   "build",
   "rica_server.egg-info",
 ]
+
+[tool.ruff.lint]
+select = [
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "I",  # isort
+]
+ignore = []
