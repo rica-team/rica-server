@@ -36,6 +36,10 @@ class ReasoningThread:
         """
         Initializes the reasoning thread.
 
+        Note:
+            The instance must be initialized by calling `await instance.initialize()`
+            before any other operations.
+
         Args:
             context: The initial context string.
         """
@@ -44,9 +48,15 @@ class ReasoningThread:
         self._context: str = context or ""
         self._response_callbacks: List[Callable[[Any], Any]] = []  # For @trigger
         self._token_callbacks: List[Callable[[str], Any]] = []  # For @token_generated
+        self._initialized = False
 
+    async def initialize(self):
+        """Initialize the reasoning thread by installing system apps."""
+        if self._initialized:
+            return
         # Install the virtual 'rica' app for system prompts
-        asyncio.run(self.install(RiCA("rica")))
+        await self.install(RiCA("rica"))
+        self._initialized = True
 
     async def install(self, app: RiCA):
         """Installs a RiCA application."""
