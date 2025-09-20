@@ -65,10 +65,11 @@ class RiCA:
     Functions can be exposed as endpoints by decorating them with the .route() method.
     """
 
-    def __init__(self, package: str):
+    def __init__(self, package: str, description: str = ""):
         if not _package_checker(package):
             raise PackageInvalidError(f"Package name '{package}' is invalid.")
         self.package = package
+        self.description = description
         self.routes: list[Application] = []
 
     def find_route(self, route_path: str) -> Optional[Application]:
