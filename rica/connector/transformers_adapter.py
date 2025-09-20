@@ -24,7 +24,7 @@ except ImportError:
         "The transformers adapter requires 'transformers' and 'torch' to be installed."
     )
 
-default_model_name = "google/gemma3-12b-it"
+default_model_name = "google/gemma3-4b-it"
 
 
 class _ToolCallStoppingCriteria(StoppingCriteria):
