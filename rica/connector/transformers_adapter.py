@@ -24,7 +24,7 @@ except ImportError:
         "The transformers adapter requires 'transformers' and 'torch' to be installed."
     )
 
-default_model_name = "google/gemma-3-1b-it"
+default_model_name = "gpt2"
 
 
 class _ToolCallStoppingCriteria(StoppingCriteria):
@@ -88,6 +88,10 @@ class TransformersReasoningThread(ReasoningThread):
         if text is None:
             return
 
+        # Ensure model is loaded and prompt is injected before processing input
+        await self._ensure_model()
+        await self._inject_prompt_if_needed()
+
         s = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
         formatted_input = f'<rica-callback package="rica.userinput">{s}</rica-callback>'
 
@@ -144,11 +148,13 @@ class TransformersReasoningThread(ReasoningThread):
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto" if torch.cuda.is_available() else "cpu",
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
+
+            if torch.cuda.is_available():
+                model = model.to("cuda")
             return model, tokenizer
 
         self._model, self._tokenizer = await asyncio.to_thread(_load_sync)
