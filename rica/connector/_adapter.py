@@ -46,7 +46,7 @@ class ReasoningThread:
         self._token_callbacks: List[Callable[[str], Any]] = []  # For @token_generated
 
         # Install the virtual 'rica' app for system prompts
-        self.install(RiCA("rica"))
+        asyncio.run(self.install(RiCA("rica")))
 
     async def install(self, app: RiCA):
         """Installs a RiCA application."""
