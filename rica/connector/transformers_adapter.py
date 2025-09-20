@@ -6,9 +6,8 @@ from threading import Thread
 from typing import Any, Dict, Optional
 
 from ..exceptions import AdapterDependenciesImportError
-from ..server import RiCA
 from ..utils.prompt import _rica_prompt
-from ._adapter import _ReasoningThreadTemplate
+from ._adapter import ReasoningThread
 
 try:
     import torch
@@ -41,7 +40,7 @@ class _ToolCallStoppingCriteria(StoppingCriteria):
         return False
 
 
-class ReasoningThread(_ReasoningThreadTemplate):
+class TransformersReasoningThread(ReasoningThread):
     """
     A reasoning thread based on Hugging Face Transformers that supports a token-by-token
     generation loop with real-time text insertion and tool-call execution.
@@ -49,12 +48,11 @@ class ReasoningThread(_ReasoningThreadTemplate):
 
     def __init__(
             self,
-            app: RiCA,
             context: str = "",
             model_name: str = default_model_name,
             generation_config: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(app, context)
+        super().__init__(context)
         self.model_name: str = model_name
         self.model_modal: str = "PyTorch/Transformers"
 
@@ -158,7 +156,9 @@ class ReasoningThread(_ReasoningThreadTemplate):
             return
 
         async with self._lock:
-            system_prompt = await _rica_prompt(self._app, self.model_name, self.model_modal)
+            # The prompt now needs access to all installed apps
+            async with self._apps_lock:
+                system_prompt = await _rica_prompt(self._apps, self.model_name, self.model_modal)
             self._context = system_prompt + self._context
             self._prompt_injected = True
             print("--- System Prompt Injected ---")
