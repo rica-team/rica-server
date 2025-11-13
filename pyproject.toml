@@ -7,7 +7,7 @@ name = "rica-server"
 version = "0.0.1dev1"
 description = "Multi-threaded Reasoning for Large Language Models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 authors = [{ name = "kaokao221", email = "kaokao221@outlook.com" }]
 license = "GPL-3.0-only"
 keywords = ["llms", "pytorch", "nlp"]
@@ -31,12 +31,12 @@ packages = ["rica", "rica.connector", "rica.utils"]
 
 [tool.black]
 line-length = 100
-target-version = ["py38"]
+target-version = ["py312"]
 include = "\\.(py|pyi)$"
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py312"
 exclude = [
   ".git",
   ".venv",

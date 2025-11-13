@@ -1,11 +1,12 @@
 name: Build & Publish Python Package
 
 on:
-  release:
-    types: [published, prereleased]
+  push:
+    tags:
+      - 'v*' # 仅在推送 v 开头的标签时触发 (例如 v1.0, v1.2.3, v1.0.0b1)
 
 permissions:
-  contents: read
+  contents: read # 默认权限（读取）
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -15,7 +16,6 @@ jobs:
   build:
     name: Build distributions
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -41,49 +41,16 @@ jobs:
           name: dist-artifacts
           path: dist/
 
-  publish-testpypi:
-    name: Publish to TestPyPI (pre-releases)
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: |
-      github.event.release.prerelease == true ||
-      contains(github.event.release.tag_name, 'dev') ||
-      contains(github.event.release.tag_name, 'rc')
-
-    permissions:
-      id-token: write
-
-    environment:
-      name: testpypi
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-artifacts
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
   publish-pypi:
     name: Publish to PyPI (final releases)
     runs-on: ubuntu-latest
     needs: [build]
-    if: |
-      github.event.release.prerelease == false &&
-      !contains(github.event.release.tag_name, 'dev') &&
-      !contains(github.event.release.tag_name, 'rc')
 
     permissions:
-      id-token: write
+      id-token: write # 必需：用于 PyPI OIDC
 
     environment:
-      name: pypi
+      name: pypi-release # 您的 OIDC 环境名称
 
     steps:
       - name: Download build artifacts
@@ -96,3 +63,30 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    permissions:
+      contents: write # 必需：用于创建 Release
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist/
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }} # 使用触发了工作流的标签名
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          # 如果标签名包含 -dev, -rc, -beta, 自动将其标记为 "Pre-release"
+          prerelease: ${{ contains(github.ref_name, '-dev') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          files: dist/* # 上传 dist/ 目录下的所有构建产物 (sdist 和 wheel)
