@@ -5,9 +5,9 @@ import json
 from threading import Thread
 from typing import Any, Dict, Optional
 
+from ..core.executor import Executor
 from ..exceptions import AdapterDependenciesImportError
 from ..utils.prompt import _rica_prompt
-from .base import ReasoningThread
 
 try:
     import torch
@@ -40,7 +40,7 @@ class _ToolCallStoppingCriteria(StoppingCriteria):
         return False
 
 
-class TransformersReasoningThread(ReasoningThread):
+class TransformersExecutor(Executor):
     """
     A reasoning thread based on Hugging Face Transformers that supports a token-by-token
     generation loop with real-time text insertion and tool-call execution.
@@ -149,12 +149,14 @@ class TransformersReasoningThread(ReasoningThread):
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto",
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            if torch.cuda.is_available():
-                model = model.to("cuda")
+            model.tie_weights()
+            print("--- Model weights tied ---")
+
             return model, tokenizer
 
         self._model, self._tokenizer = await asyncio.to_thread(_load_sync)
@@ -199,25 +201,31 @@ class TransformersReasoningThread(ReasoningThread):
                     "streamer": self._streamer,
                     "stopping_criteria": self._stopping_criteria,
                 }
-                thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
-                thread.start()
+                # Run the blocking generation in a separate thread managed by asyncio
+                generation_task = asyncio.to_thread(self._model.generate, **generation_kwargs)
 
                 while True:
-                    # Use the safe wrapper function with to_thread
-                    new_text = await asyncio.to_thread(self._get_next_token_from_streamer)
+                    try:
+                        # Safely get the next token from the streamer
+                        new_text = await asyncio.to_thread(self._get_next_token_from_streamer)
 
-                    if new_text is None:
-                        # None indicates StopIteration was caught, so generation is finished.
+                        if new_text is None:  # End of generation
+                            break
+
+                        if self._stop_event.is_set() or not self._pause_event.is_set():
+                            # If stopped or paused, we should stop pulling from the streamer
+                            break
+
+                        async with self._lock:
+                            self._context += new_text
+                        await self._emit_token(new_text)
+
+                    except StopIteration:
+                        # This handles the case where the streamer is exhausted
                         break
 
-                    if self._stop_event.is_set() or not self._pause_event.is_set():
-                        break
-
-                    async with self._lock:
-                        self._context += new_text
-                    await self._emit_token(new_text)
-
-                await asyncio.to_thread(thread.join)
+                # Ensure the generation task is complete before proceeding
+                await generation_task
 
                 was_executed, _ = await self._detect_and_execute_tool_tail()
                 if not was_executed:

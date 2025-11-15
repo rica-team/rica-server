@@ -1,38 +1,59 @@
 import asyncio
 import json
+import logging
 
-from rica.adapter import transformers_adapter as tf
-from rica.utils.server import RiCA
+from rica.adapters import transformers_adapter as tf
+from rica.core.application import RiCA
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 1. Create the RiCA application instance first.
-app = RiCA("demo.sys")
+app = RiCA("demo.sys", description="System utilities for demo purposes")
 
 
 # 2. Register tools with the application instance.
 @app.route("/exec", background=False, timeout=5000)
 async def _sys_python_exec(input_):
     """
-    A tool to execute a single line of Python code.
-    input:
+    A tool to execute a single line of Python code safely.
+
+    Input Schema:
     {
-        "code": "1+1"
+        "code": "string - Python expression to evaluate"
     }
-    output:
+
+    Output Schema:
     {
-        "result": "2"
+        "result": "string - Evaluation result",
+        "error": "string - Error message (if any)"
     }
+
+    WARNING: This is a demonstration. Do NOT use eval() in production.
     """
     try:
         code = input_.get("code", "")
-        # Using eval is unsafe. For a real application, use a safer execution environment.
-        result = eval(code)
+        if not code:
+            return {"error": "No code provided"}
+
+        # Limit code length and content
+        if len(code) > 100:
+            return {"error": "Code too long (max 100 chars)"}
+
+        # Use ast.literal_eval for safer evaluation of literals
+        import ast
+        result = ast.literal_eval(code)
         return {"result": str(result)}
+    except (ValueError, SyntaxError) as e:
+        return {"error": f"Invalid expression: {str(e)}"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"Execution error: {e}", exc_info=True)
+        return {"error": f"Execution failed: {str(e)}"}
 
 
-# 3. Create the ReasoningThread, passing the app instance to it.
-rt = tf.TransformersReasoningThread(model_name="google/gemma-3-1b-it")
+# 3. Create the Executor, passing the app instance to it.
+rt = tf.TransformersExecutor(model_name="Qwen/Qwen3-0.6B")
 
 
 # 4. Register callbacks.

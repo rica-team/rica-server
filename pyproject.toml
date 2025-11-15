@@ -12,7 +12,10 @@ authors = [{ name = "kaokao221", email = "kaokao221@outlook.com" }]
 license = "GPL-3.0-only"
 keywords = ["llms", "pytorch", "nlp"]
 
-dependencies = []
+dependencies = [
+    "jinja2",
+    "jsonschema"
+]
 
 [project.optional-dependencies]
 pt = [
@@ -22,12 +25,15 @@ pt = [
   "accelerate",
   "hf_xet"
 ]
+dev = [
+    "pytest"
+]
 
 [project.urls]
 Repository = "https://github.com/rica-team/rica-server.git"
 
 [tool.setuptools]
-packages = ["rica", "rica.adapter", "rica.utils", "rica.core"]
+packages = ["rica", "rica.adapters", "rica.core", "rica.utils"]
 
 [tool.black]
 line-length = 100
