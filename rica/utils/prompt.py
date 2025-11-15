@@ -1,51 +1,74 @@
 from typing import Dict
+from jinja2 import Template
 
-from rica.utils.server import RiCA
+from ..core.application import RiCA
 
-prompt_1 = """You're RiCA """
+# Using Jinja2 template for more flexibility
+SYSTEM_PROMPT_TEMPLATE = Template(\"\"\"
+You are RiCA {{ model_name }}, powered by {{ model_modal }}.
 
-prompt_2 = """, and you're powered by """
+Unlike traditional assistants, you can call tools and continue thinking while waiting for callbacks.
 
-prompt_3 = (
-    """.
+**IMPORTANT**: Only content within <rica> blocks will be processed by RiCA Server.
+All other text is your internal reasoning and will NOT be shown to the user.
 
-Be different from any others, you're allowed to call tools and still thinking
-when waiting for toll callback.
+## Available Tools
 
-IMPORTANTLY, only generated content in <rica> block will be process by RiCA
-Server and any other will be ignored as"""
-    """ your thinking which will never be shown to the user.
+{% for package_name, app in apps.items() %}
+### Application: {{ package_name }}
+Description: {{ app.description or "No description" }}
 
-Here are the tools you can use:"""
-)
+{% for route in app.routes %}
+- **Route**: `{{ route.route }}`
+  - **Description**: {{ route.function.__doc__ or "No description" }}
+  - **Background**: {{ route.background }}
+  {% if route.background %}
+  - **Timeout**: {{ route.timeout }}ms
+  {% endif %}
+{% endfor %}
+{% endfor %}
 
-prompt_4 = """Here is the guidance to call a tool:
+## Usage Guide
 
-The tools are defined in a nested structure. First you have the application,
-then the route within that application.
+To call a tool, use this format:
 
-For example, to call the `/exec` route from the `com.example.pyexec` application, you would write:
-<rica package="com.example.pyexec" route="/exec">{"code": "1+1"}</rica>
+```xml
+<rica package="package_name" route="/route_name">
+{
+  "arg1": "value1",
+  "arg2": "value2"
+}
+</rica>
+```
 
-The definitions show which routes can be run in the background and their timeouts.
-"""
+Example:
 
+```xml
+<rica package="demo.sys" route="/exec">
+{
+  "code": "1 + 1"
+}
+</rica>
+```
 
-async def _rica_prompt(apps: Dict[str, RiCA], model_name: str, model_modal: str):
-    tools_text = ""
-    for package_name, app in apps.items():
-        app_desc = app.description or ""
-        tools_text += f'<app package="{package_name}" description="{app_desc}">\n'
+To send a response to the user:
 
-        for route in app.routes:
-            route_desc = route.function.__doc__ or ""
-            tools_text += f'  <route path="{route.route}">\n'
-            tools_text += f"    <description>{route_desc}</description>\n"
-            tools_text += f"    <background>{str(route.background)}</background>\n"
-            if route.background:
-                tools_text += f"    <timeout>{route.timeout}</timeout>\n"
-            tools_text += "  </route>\n"
+```xml
+<rica package="rica" route="/response">
+[
+  {
+    "type": "text",
+    "content": "This is the final answer to the user."
+  }
+]
+</rica>
+```
+\"\"\")
 
-        tools_text += "</app>\n"
-
-    return prompt_1 + model_name + prompt_2 + model_modal + prompt_3 + tools_text + prompt_4
+async def _rica_prompt(apps: Dict[str, RiCA], model_name: str, model_modal: str) -> str:
+    \"\"\"Generate system prompt using Jinja2 template.\"\"\"
+    return SYSTEM_PROMPT_TEMPLATE.render(
+        apps=apps,
+        model_name=model_name,
+        model_modal=model_modal
+    )

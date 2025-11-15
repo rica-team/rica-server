@@ -1,8 +1,9 @@
 import asyncio
 import functools
 import json
+import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -14,12 +15,16 @@ from ..exceptions import (
     RouteNotFoundError,
     UnexpectedExecutionError,
 )
-from rica.utils.server import Application, CallBack, RiCA
+from .application import CallBack, RiCA, Route
 
-__all__ = ["ReasoningThread"]
+__all__ = ["Executor"]
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-class ReasoningThread:
+class Executor:
     """
     Base template for reasoning adapters.
 
@@ -30,6 +35,10 @@ class ReasoningThread:
       - @token_generated: Receives every raw token from the model.
       - @trigger: Receives only the payload from a rica.response tool call.
     - Detecting and executing <rica ...>...</rica> tool calls.
+
+    Attributes:
+        _apps: A dictionary of installed RiCA applications.
+        _context: The textual context buffer.
     """
 
     def __init__(self, context: str = ""):
@@ -59,7 +68,16 @@ class ReasoningThread:
         self._initialized = True
 
     async def install(self, app: RiCA):
-        """Installs a RiCA application."""
+        """
+        Installs a RiCA application.
+
+        Args:
+            app: An instance of the RiCA class.
+
+        Raises:
+            TypeError: If the 'app' argument is not an instance of RiCA.
+            PackageExistError: If an application with the same package name is already installed.
+        """
         if not isinstance(app, RiCA):
             raise TypeError("The 'app' argument must be an instance of RiCA.")
         async with self._apps_lock:
@@ -70,7 +88,15 @@ class ReasoningThread:
             self._apps[app.package] = app
 
     async def uninstall(self, package_name: str):
-        """Uninstalls a RiCA application by its package name."""
+        """
+        Uninstalls a RiCA application by its package name.
+
+        Args:
+            package_name: The package name of the application to uninstall.
+
+        Raises:
+            PackageNotFoundError: If the application with the given package name is not found.
+        """
         async with self._apps_lock:
             if package_name not in self._apps:
                 raise PackageNotFoundError(f"Application with package '{package_name}' not found.")
@@ -157,37 +183,73 @@ class ReasoningThread:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _execute_tool_call(self, app: Application, data: list | dict):
-        """Execute a registered function."""
+    async def _execute_tool_call(self, app: Route, data: list | dict) -> Union[CallBack, Coroutine[Any, Any, None]]:
+        """
+        Execute a registered function.
+
+        Args:
+            app: The Route object representing the tool to be executed.
+            data: The input data for the tool.
+
+        Returns:
+            A CallBack object for synchronous tools, or a coroutine for background tools.
+        """
         function = app.function
         timeout = app.timeout
         background = app.background
 
-        if not asyncio.iscoroutinefunction(function):
-            function = asyncio.to_thread(functools.partial(function, data))
-        else:
-            function = function(data)
+        start_time = asyncio.get_event_loop().time()
 
-        if background:
-            call_id = uuid4()
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(function, name=str(call_id))
-            if timeout > 0:
-                cancel_handle = loop.call_later(timeout / 1000, task.cancel)
-                task.add_done_callback(lambda _: cancel_handle.cancel())
-            return call_id
-        else:
-            try:
-                result = (
-                    await asyncio.wait_for(function, timeout / 1000)
-                    if timeout > 0
-                    else await function
-                )
-                return CallBack(package=app.route, call_id=uuid4(), callback=result)
-            except asyncio.TimeoutError as e:
-                raise ExecutionTimedOut from e
-            except Exception as e:
-                raise UnexpectedExecutionError(str(e)) from e
+        try:
+            if not asyncio.iscoroutinefunction(function):
+                function = asyncio.to_thread(functools.partial(function, data))
+            else:
+                function = function(data)
+
+            if background:
+                call_id = uuid4()
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(function, name=str(call_id))
+
+                def on_task_done(t):
+                    try:
+                        if t.cancelled():
+                            logger.warning(f"Task {call_id} was cancelled")
+                        elif t.exception():
+                            logger.error(f"Task {call_id} failed", exc_info=t.exception())
+                    except Exception as e:
+                        logger.error(f"Error in task callback: {e}")
+
+                task.add_done_callback(on_task_done)
+
+                if timeout > 0:
+                    cancel_handle = loop.call_later(timeout / 1000, task.cancel)
+                    task.add_done_callback(lambda _: cancel_handle.cancel())
+                return call_id
+            else:
+                try:
+                    result = (
+                        await asyncio.wait_for(function, timeout / 1000)
+                        if timeout > 0
+                        else await function
+                    )
+                    duration = (asyncio.get_event_loop().time() - start_time) * 1000
+                    return CallBack(
+                        package=app.route.split('/')[0],
+                        route=app.route,
+                        call_id=uuid4(),
+                        callback=result,
+                        duration_ms=duration
+                    )
+                except asyncio.TimeoutError as e:
+                    logger.error(f"Tool call timed out after {timeout}ms")
+                    raise ExecutionTimedOut from e
+                except Exception as e:
+                    logger.error(f"Tool execution failed: {e}", exc_info=True)
+                    raise UnexpectedExecutionError(str(e)) from e
+        except Exception as e:
+            logger.critical(f"Critical error in _execute_tool_call: {e}", exc_info=True)
+            raise
 
     async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
         """Detect and execute a trailing <rica ...>...</rica> in the context."""

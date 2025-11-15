@@ -6,42 +6,17 @@ RiCA Server for Python
 
 from __future__ import annotations
 
-import asyncio
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import adapter
-from rica.utils.server import Application, CallBack, RiCA
+from .core.application import CallBack, RiCA, Route
+from .core.executor import Executor
 
-__all__ = ["RiCA", "Application", "CallBack", "adapter"]
-
-try:
-    _loop = asyncio.get_running_loop()
-except RuntimeError:
-    _loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_loop)
-
-_DISTRIBUTION_NAME = "rica-server"
-
-
-def _read_version_fallback() -> str:
-    try:
-        import tomllib
-
-        root = Path(__file__).resolve().parent.parent
-        pyproject = root / "pyproject.toml"
-        if pyproject.is_file():
-            with pyproject.open("rb") as f:
-                data = tomllib.load(f)
-                v = data.get("project", {}).get("version")
-                if isinstance(v, str) and v:
-                    return v
-    except Exception:
-        pass
-    return "unspecified"
-
+__all__ = ["RiCA", "Route", "CallBack", "Executor"]
 
 try:
+    _DISTRIBUTION_NAME = "rica-server"
     __version__ = version(_DISTRIBUTION_NAME)
 except PackageNotFoundError:
-    __version__ = _read_version_fallback()
+    # Fallback for when the package is not installed
+    __version__ = "0.0.0-dev"
