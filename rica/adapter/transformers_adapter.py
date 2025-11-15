@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from ..exceptions import AdapterDependenciesImportError
 from ..utils.prompt import _rica_prompt
-from ._adapter import ReasoningThread
+from .base import ReasoningThread
 
 try:
     import torch

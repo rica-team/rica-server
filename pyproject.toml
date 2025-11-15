@@ -27,7 +27,7 @@ pt = [
 Repository = "https://github.com/rica-team/rica-server.git"
 
 [tool.setuptools]
-packages = ["rica", "rica.connector", "rica.utils"]
+packages = ["rica", "rica.adapter", "rica.utils", "rica.core"]
 
 [tool.black]
 line-length = 100

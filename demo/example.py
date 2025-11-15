@@ -1,8 +1,8 @@
 import asyncio
 import json
 
-from rica.connector import transformers_adapter as tf
-from rica.server import RiCA
+from rica.adapter import transformers_adapter as tf
+from rica.utils.server import RiCA
 
 # 1. Create the RiCA application instance first.
 app = RiCA("demo.sys")

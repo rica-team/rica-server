@@ -14,7 +14,7 @@ from ..exceptions import (
     RouteNotFoundError,
     UnexpectedExecutionError,
 )
-from ..server import Application, CallBack, RiCA
+from rica.utils.server import Application, CallBack, RiCA
 
 __all__ = ["ReasoningThread"]
 

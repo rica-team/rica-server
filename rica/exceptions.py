@@ -14,7 +14,7 @@ class RouteExistError(ValueError):
 
 
 class RouteNotFoundError(ValueError):
-    """Raised when a requested route cannot befound in the package."""
+    """Raised when a requested route cannot be found in the package."""
 
 
 class PackageNotFoundError(ValueError):

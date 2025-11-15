@@ -1,4 +1,5 @@
-"""Server module for RiCA.
+"""
+Server module for RiCA.
 
 Defines the RiCA class, route registration utilities, and simple Application
 and CallBack containers. Ensures packages are validated and that externally
@@ -10,7 +11,7 @@ import functools
 from typing import Any, Callable, Optional
 from uuid import UUID
 
-from .exceptions import PackageInvalidError, RouteExistError
+from rica.exceptions import PackageInvalidError, RouteExistError
 
 __all__ = ["RiCA", "Application", "CallBack"]
 
@@ -84,7 +85,7 @@ class RiCA:
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a new endpoint (route) dynamically.
 
-        Non-async functions are wrapped with asyncio.to_thread so they behave as async callables.
+        Non-async functions are wrapped with `asyncio.to_thread` so they behave as async callables.
         """
         if self.find_route(route_path):
             raise RouteExistError(

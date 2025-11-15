@@ -26,8 +26,7 @@ we are still in working on the modification for a stable version. Keep waiting f
 
 ```python
 from rica import RiCA
-from rica.connector import transformer_adapter as tf
-
+from rica.adapter import transformer_adapter as tf
 
 app = RiCA()
 

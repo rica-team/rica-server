@@ -10,10 +10,10 @@ import asyncio
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import connector
-from .server import Application, CallBack, RiCA
+from . import adapter
+from rica.utils.server import Application, CallBack, RiCA
 
-__all__ = ["RiCA", "Application", "CallBack", "connector"]
+__all__ = ["RiCA", "Application", "CallBack", "adapter"]
 
 try:
     _loop = asyncio.get_running_loop()

@@ -1,6 +1,6 @@
 from typing import Dict
 
-from ..server import RiCA
+from rica.utils.server import RiCA
 
 prompt_1 = """You're RiCA """
 
