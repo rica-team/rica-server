@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from threading import Thread
 from typing import Any, Dict, Optional
 
-from ..core.executor import Executor
+from .base import ReasoningThreadBase
 from ..exceptions import AdapterDependenciesImportError
 from ..utils.prompt import _rica_prompt
 
@@ -40,7 +39,7 @@ class _ToolCallStoppingCriteria(StoppingCriteria):
         return False
 
 
-class TransformersExecutor(Executor):
+class ReasoningThread(ReasoningThreadBase):
     """
     A reasoning thread based on Hugging Face Transformers that supports a token-by-token
     generation loop with real-time text insertion and tool-call execution.

@@ -7,7 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from ..exceptions import (
+from rica.exceptions import (
     ExecutionTimedOut,
     InvalidRiCAString,
     PackageExistError,
@@ -15,16 +15,16 @@ from ..exceptions import (
     RouteNotFoundError,
     UnexpectedExecutionError,
 )
-from .application import CallBack, RiCA, Route
+from rica.core.application import CallBack, RiCA, Route
 
-__all__ = ["Executor"]
+__all__ = ["ReasoningThreadBase"]
 
 # Configure logger
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-class Executor:
+class ReasoningThreadBase:
     """
     Base template for reasoning adapters.
 

@@ -7,12 +7,11 @@ RiCA Server for Python
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 
 from .core.application import CallBack, RiCA, Route
-from .core.executor import Executor
+from rica.adapters.base import ReasoningThreadBase
 
-__all__ = ["RiCA", "Route", "CallBack", "Executor"]
+__all__ = ["RiCA", "Route", "CallBack", "ReasoningThreadBase"]
 
 try:
     _DISTRIBUTION_NAME = "rica-server"

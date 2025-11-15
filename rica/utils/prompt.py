@@ -4,7 +4,7 @@ from jinja2 import Template
 from ..core.application import RiCA
 
 # Using Jinja2 template for more flexibility
-SYSTEM_PROMPT_TEMPLATE = Template(\"\"\"
+SYSTEM_PROMPT_TEMPLATE = Template("""
 You are RiCA {{ model_name }}, powered by {{ model_modal }}.
 
 Unlike traditional assistants, you can call tools and continue thinking while waiting for callbacks.
@@ -63,10 +63,10 @@ To send a response to the user:
 ]
 </rica>
 ```
-\"\"\")
+""")
 
 async def _rica_prompt(apps: Dict[str, RiCA], model_name: str, model_modal: str) -> str:
-    \"\"\"Generate system prompt using Jinja2 template.\"\"\"
+    """Generate system prompt using Jinja2 template."""
     return SYSTEM_PROMPT_TEMPLATE.render(
         apps=apps,
         model_name=model_name,

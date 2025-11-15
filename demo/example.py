@@ -53,7 +53,7 @@ async def _sys_python_exec(input_):
 
 
 # 3. Create the Executor, passing the app instance to it.
-rt = tf.TransformersExecutor(model_name="Qwen/Qwen3-0.6B")
+rt = tf.ReasoningThread(model_name="Qwen/Qwen3-0.6B")
 
 
 # 4. Register callbacks.
