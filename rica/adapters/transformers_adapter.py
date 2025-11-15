@@ -145,11 +145,22 @@ class ReasoningThread(ReasoningThreadBase):
 
         def _load_sync():
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            
+            # 确定设备
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            
+            # 修复: 使用 low_cpu_mem_usage=False 避免 meta tensor 问题
+            # 或者不使用 device_map="auto",直接手动指定设备
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto",
+                torch_dtype=dtype,
+                low_cpu_mem_usage=False,  # 关键修复
             )
+            
+            # 手动移动模型到设备
+            model = model.to(device)
+            
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
