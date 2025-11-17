@@ -146,14 +146,15 @@ class ReasoningThread(ReasoningThreadBase):
         def _load_sync():
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             
-            device = "cuda" if torch.cuda.is_available() else "cpu"
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
+            # 使用 device_map="auto" 直接将模型加载到 GPU，避免 CPU 内存溢出
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                low_cpu_mem_usage=False,
+                low_cpu_mem_usage=True,
+                device_map="auto",
+                torch_dtype=dtype,
             )
-            model = model.to(device, dtype=dtype)
 
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
