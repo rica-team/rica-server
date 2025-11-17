@@ -146,32 +146,26 @@ class ReasoningThread(ReasoningThreadBase):
         def _load_sync():
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             
-            # 确定设备
             device = "cuda" if torch.cuda.is_available() else "cpu"
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-            
-            # 修复: 使用 low_cpu_mem_usage=False 避免 meta tensor 问题
-            # 或者不使用 device_map="auto",直接手动指定设备
+
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=dtype,
-                low_cpu_mem_usage=False,  # 关键修复
+                low_cpu_mem_usage=False,
             )
-            
-            # 手动移动模型到设备
-            model = model.to(device)
-            
+            model = model.to(device, dtype=dtype)
+
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-
-            model.tie_weights()
-            print("--- Model weights tied ---")
 
             return model, tokenizer
 
         self._model, self._tokenizer = await asyncio.to_thread(_load_sync)
         self._streamer = TextIteratorStreamer(
-            self._tokenizer, skip_prompt=True, skip_special_tokens=True
+            self._tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+            timeout=None,
         )
         self._stopping_criteria = StoppingCriteriaList([_ToolCallStoppingCriteria(self._tokenizer)])
         self._model.eval()
@@ -181,12 +175,10 @@ class ReasoningThread(ReasoningThreadBase):
             return
 
         async with self._lock:
-            # The prompt now needs access to all installed apps
             async with self._apps_lock:
                 system_prompt = await _rica_prompt(self._apps, self.model_name, self.model_modal)
             self._context = system_prompt + self._context
             self._prompt_injected = True
-            print("--- System Prompt Injected ---")
 
     async def _run_loop(self):
         try:
@@ -211,31 +203,30 @@ class ReasoningThread(ReasoningThreadBase):
                     "streamer": self._streamer,
                     "stopping_criteria": self._stopping_criteria,
                 }
-                # Run the blocking generation in a separate thread managed by asyncio
+
+                async def _read_from_streamer():
+                    """Read tokens from streamer and emit them."""
+                    while True:
+                        try:
+                            new_text = await asyncio.to_thread(self._get_next_token_from_streamer)
+
+                            if new_text is None:
+                                break
+
+                            if self._stop_event.is_set() or not self._pause_event.is_set():
+                                break
+
+                            async with self._lock:
+                                self._context += new_text
+                            await self._emit_token(new_text)
+
+                        except StopIteration:
+                            break
+
                 generation_task = asyncio.to_thread(self._model.generate, **generation_kwargs)
+                reader_task = asyncio.create_task(_read_from_streamer())
 
-                while True:
-                    try:
-                        # Safely get the next token from the streamer
-                        new_text = await asyncio.to_thread(self._get_next_token_from_streamer)
-
-                        if new_text is None:  # End of generation
-                            break
-
-                        if self._stop_event.is_set() or not self._pause_event.is_set():
-                            # If stopped or paused, we should stop pulling from the streamer
-                            break
-
-                        async with self._lock:
-                            self._context += new_text
-                        await self._emit_token(new_text)
-
-                    except StopIteration:
-                        # This handles the case where the streamer is exhausted
-                        break
-
-                # Ensure the generation task is complete before proceeding
-                await generation_task
+                await asyncio.gather(generation_task, reader_task, return_exceptions=True)
 
                 was_executed, _ = await self._detect_and_execute_tool_tail()
                 if not was_executed:

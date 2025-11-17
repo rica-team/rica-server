@@ -308,4 +308,4 @@ class ReasoningThreadBase:
             error_message = f"[tool-error]{type(e).__name__}: {e}"
             self._context += error_message
             await self._emit_token(error_message)
-            return False, None
+            return True, error_message
