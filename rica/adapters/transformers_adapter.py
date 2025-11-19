@@ -4,9 +4,9 @@ import asyncio
 import json
 from typing import Any, Dict, Optional
 
-from .base import ReasoningThreadBase
 from ..exceptions import AdapterDependenciesImportError
 from ..utils.prompt import _rica_prompt
+from .base import ReasoningThreadBase
 
 try:
     import torch
@@ -23,7 +23,9 @@ except ImportError:
         "The transformers adapter requires 'transformers' and 'torch' to be installed."
     )
 
-default_model_name = "google/gemma3-4b-it"
+from ..config import DEFAULT_MODEL_NAME
+
+default_model_name = DEFAULT_MODEL_NAME
 
 
 class _ToolCallStoppingCriteria(StoppingCriteria):
@@ -50,6 +52,8 @@ class ReasoningThread(ReasoningThreadBase):
         context: str = "",
         model_name: str = default_model_name,
         generation_config: Optional[Dict[str, Any]] = None,
+        model: Optional[AutoModelForCausalLM] = None,
+        tokenizer: Optional[AutoTokenizer] = None,
     ):
         super().__init__(context)
         self.model_name: str = model_name
@@ -64,8 +68,8 @@ class ReasoningThread(ReasoningThreadBase):
         self._is_running = False
         self._pause_event.set()
 
-        self._model: Optional[AutoModelForCausalLM] = None
-        self._tokenizer: Optional[AutoTokenizer] = None
+        self._model: Optional[AutoModelForCausalLM] = model
+        self._tokenizer: Optional[AutoTokenizer] = tokenizer
         self._streamer: Optional[TextIteratorStreamer] = None
         self._stopping_criteria: Optional[StoppingCriteriaList] = None
 
@@ -78,6 +82,30 @@ class ReasoningThread(ReasoningThreadBase):
         if generation_config:
             default_config.update(generation_config)
         self._generation_config = GenerationConfig(**default_config)
+
+    async def create_sub_thread(
+        self, model_name: Optional[str] = None, config: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Create a sub-thread.
+        If model_name is None or matches current model, share the model instance.
+        """
+        target_model_name = model_name or self.model_name
+
+        shared_model = None
+        shared_tokenizer = None
+
+        if target_model_name == self.model_name:
+            await self._ensure_model()
+            shared_model = self._model
+            shared_tokenizer = self._tokenizer
+
+        return ReasoningThread(
+            model_name=target_model_name,
+            generation_config=config,
+            model=shared_model,
+            tokenizer=shared_tokenizer,
+        )
 
     # --------------------------------------------------------------------------
     # Public Lifecycle API
@@ -145,7 +173,7 @@ class ReasoningThread(ReasoningThreadBase):
 
         def _load_sync():
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            
+
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
             # 使用 device_map="auto" 直接将模型加载到 GPU，避免 CPU 内存溢出

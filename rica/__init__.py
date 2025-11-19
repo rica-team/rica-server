@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .core.application import CallBack, RiCA, Route
 from rica.adapters.base import ReasoningThreadBase
+
+from .core.application import CallBack, RiCA, Route
 
 __all__ = ["RiCA", "Route", "CallBack", "ReasoningThreadBase"]
 

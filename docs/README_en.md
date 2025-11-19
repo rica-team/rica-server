@@ -1,8 +1,5 @@
 # RiCA: Multi-threaded Reasoning for Large Language Models
 
-| [English](README.md) | [中文](docs/zh/README.md) |
-| :--- | :--- |
-
 [![Run in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rica-team/rica-server/blob/main/demo.ipynb)
 
 **RiCA** is a framework that enables Large Language Models (LLMs) to perform multi-threaded reasoning. It allows LLMs to call external tools, continue thinking while waiting for the results, and handle multiple tool calls concurrently.
@@ -38,7 +35,6 @@ You can also explore the `demo.ipynb` notebook for a more interactive experience
 
 RiCA works by introducing a "multi-threaded thinking" capability to LLMs. When an LLM needs to use an external tool, it can choose to run it in the background. While the tool is running, the LLM can continue to reason, process information, and even call other tools. When a background tool finishes, its result is seamlessly inserted back into the LLM's context, allowing it to incorporate the new information into its reasoning process.
 
-## Documentation
+## Contributing
 
-- [Development Guide](docs/en/DEVELOPMENT.md)
-- [Contributing Guidelines](CONTRIBUTING.md)
+Contributions are welcome! If you have any ideas, suggestions, or bug reports, please open an issue or submit a pull request.

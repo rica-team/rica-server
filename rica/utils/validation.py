@@ -1,5 +1,7 @@
 from typing import Any
+
 import jsonschema
+
 
 def validate_tool_input(schema: dict, data: Any) -> bool:
     """Validate tool input against a JSON Schema."""
@@ -8,6 +10,7 @@ def validate_tool_input(schema: dict, data: Any) -> bool:
         return True
     except jsonschema.ValidationError:
         return False
+
 
 def sanitize_code(code: str, max_length: int = 1000) -> str:
     """Sanitize and limit code input."""

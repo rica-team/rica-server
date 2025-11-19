@@ -26,8 +26,16 @@ pt = [
   "hf_xet"
 ]
 dev = [
-    "pytest"
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "black"
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 
 [project.urls]
 Repository = "https://github.com/rica-team/rica-server.git"

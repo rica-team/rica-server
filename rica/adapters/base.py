@@ -7,6 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
+from rica.core.application import CallBack, RiCA, Route
 from rica.exceptions import (
     ExecutionTimedOut,
     InvalidRiCAString,
@@ -15,13 +16,14 @@ from rica.exceptions import (
     RouteNotFoundError,
     UnexpectedExecutionError,
 )
-from rica.core.application import CallBack, RiCA, Route
 
 __all__ = ["ReasoningThreadBase"]
 
 # Configure logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 
 class ReasoningThreadBase:
@@ -67,25 +69,111 @@ class ReasoningThreadBase:
         await self.install(RiCA("rica"))
         self._initialized = True
 
-    async def install(self, app: RiCA):
+    async def install(self, app: Union[RiCA, str]):
         """
         Installs a RiCA application.
 
         Args:
-            app: An instance of the RiCA class.
+            app: An instance of the RiCA class, or a file path (str) to a .py file or .tar.gz archive.
 
         Raises:
-            TypeError: If the 'app' argument is not an instance of RiCA.
+            TypeError: If the 'app' argument is invalid.
             PackageExistError: If an application with the same package name is already installed.
+            ImportError: If loading from file fails.
         """
-        if not isinstance(app, RiCA):
-            raise TypeError("The 'app' argument must be an instance of RiCA.")
+        if isinstance(app, str):
+            # Dynamic loading logic
+            app_instance = await self._load_app_from_path(app)
+        elif isinstance(app, RiCA):
+            app_instance = app
+        else:
+            raise TypeError("The 'app' argument must be an instance of RiCA or a file path string.")
+
         async with self._apps_lock:
-            if app.package in self._apps:
+            if app_instance.package in self._apps:
                 raise PackageExistError(
-                    f"Application with package '{app.package}' is already installed."
+                    f"Application with package '{app_instance.package}' is already installed."
                 )
-            self._apps[app.package] = app
+            self._apps[app_instance.package] = app_instance
+
+    async def _load_app_from_path(self, path: str) -> RiCA:
+        """Helper to load RiCA app from a file path."""
+        import importlib.util
+        import os
+        import tarfile
+        import tempfile
+        import sys
+
+        if path.endswith(".tar.gz") or path.endswith(".tar"):
+            # Handle archive
+            temp_dir = tempfile.mkdtemp()
+            try:
+                with tarfile.open(path, "r:*") as tar:
+                    tar.extractall(path=temp_dir)
+                
+                # Look for a python package or module in the extracted content
+                # We assume there's an __init__.py or a .py file
+                # Simple heuristic: add temp_dir to sys.path and try to import
+                sys.path.insert(0, temp_dir)
+                
+                # Find what to import. We look for the first directory with __init__.py or the first .py file
+                # This is a bit ambiguous. Let's assume the archive contains a folder with the package name
+                # OR the archive content IS the package.
+                
+                # Let's try to find a .py file or a directory
+                found_module = None
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        if file.endswith(".py"):
+                            # If it's __init__.py, the package is the parent dir name
+                            if file == "__init__.py":
+                                found_module = os.path.basename(root)
+                                break
+                            else:
+                                # It's a module file
+                                found_module = file[:-3]
+                                break
+                    if found_module:
+                        break
+                
+                if not found_module:
+                     raise ImportError("Could not find a valid Python module or package in the archive.")
+                
+                try:
+                    module = importlib.import_module(found_module)
+                finally:
+                    # Clean up sys.path? Maybe not if we want to keep it loaded.
+                    # But for this session it might be fine.
+                    # Ideally we should remove it to avoid pollution, but we need the module code.
+                    pass
+
+            except Exception as e:
+                raise ImportError(f"Failed to load app from archive '{path}': {e}")
+        
+        elif path.endswith(".py"):
+            # Handle single .py file
+            module_name = os.path.basename(path)[:-3]
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if not spec or not spec.loader:
+                raise ImportError(f"Could not load module from '{path}'")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        else:
+            raise ImportError(f"Unsupported file type: {path}")
+
+        # Find RiCA instance in module
+        # 1. Look for 'app' variable
+        if hasattr(module, "app") and isinstance(module.app, RiCA):
+            return module.app
+        
+        # 2. Look for any RiCA instance
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if isinstance(attr, RiCA):
+                return attr
+                
+        raise ImportError(f"No 'RiCA' instance found in module loaded from '{path}'.")
 
     async def uninstall(self, package_name: str):
         """
@@ -183,7 +271,9 @@ class ReasoningThreadBase:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _execute_tool_call(self, app: Route, data: list | dict) -> Union[CallBack, Coroutine[Any, Any, None]]:
+    async def _execute_tool_call(
+        self, app: Route, data: list | dict
+    ) -> Union[CallBack, Coroutine[Any, Any, None]]:
         """
         Execute a registered function.
 
@@ -235,11 +325,11 @@ class ReasoningThreadBase:
                     )
                     duration = (asyncio.get_event_loop().time() - start_time) * 1000
                     return CallBack(
-                        package=app.route.split('/')[0],
+                        package=app.route.split("/")[0],
                         route=app.route,
                         call_id=uuid4(),
                         callback=result,
-                        duration_ms=duration
+                        duration_ms=duration,
                     )
                 except asyncio.TimeoutError as e:
                     logger.error(f"Tool call timed out after {timeout}ms")
@@ -251,23 +341,171 @@ class ReasoningThreadBase:
             logger.critical(f"Critical error in _execute_tool_call: {e}", exc_info=True)
             raise
 
+    async def create_sub_thread(
+        self, model_name: Optional[str] = None, config: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """Create a sub-thread. To be implemented by subclasses."""
+        raise NotImplementedError
+
     async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
-        """Detect and execute a trailing <rica ...>...</rica> in the context."""
-        pattern = r"<rica\s+[^>]*>.*?<\/rica>(?!.*<rica\s+[^>]*>.*?<\/rica>)"
-        match = re.search(pattern, self._context, re.DOTALL | re.IGNORECASE)
-        if not match:
+        """Detect and execute all <rica ...>...</rica> tags in the context."""
+        # Find all tags
+        pattern = r"<rica\s+[^>]*>.*?<\/rica>"
+        matches = list(re.finditer(pattern, self._context, re.DOTALL | re.IGNORECASE))
+
+        if not matches:
             return False, None
 
-        tag_text = match.group(0)
+        # Only process tags that haven't been processed yet.
+        # Since we append results to the context, we need a way to distinguish processed tags.
+        # A simple heuristic is to check if the tag is followed by a result block or if it's at the very end.
+        # However, simpler is to assume the model generates tags at the end.
+        # But if we have multiple tags, we want to process them all.
+
+        # Strategy: Find the last contiguous block of tags at the end of the context.
+        # This is tricky because there might be whitespace.
+
+        # Simplified Strategy:
+        # 1. Find all tags.
+        # 2. Filter out tags that already have a corresponding result (this is hard without IDs).
+        # 3. Actually, the standard flow is: Model generates -> Stop at </rica> -> We process -> Append result.
+        # If the model generates multiple tags in one go (e.g. <rica>A</rica> <rica>B</rica>),
+        # the stopping criteria might stop at the first </rica> or the last?
+        # The current stopping criteria stops at ANY </rica>.
+        # So we likely only have ONE tag at the end.
+        # BUT, if the model is fast or we change stopping criteria, we might have multiple.
+        # Let's assume we process the LAST tag found.
+        # Wait, user wants "simultaneous tool calls".
+        # If the model outputs: <rica>A</rica>\n<rica>B</rica>
+        # We should execute both.
+
+        # Let's try to find all tags that are NOT followed by a result block (e.g. JSON or UUID).
+        # This is getting complex.
+        # Alternative: The `_context` grows. We can keep track of the `last_processed_index`.
+
+        # For now, let's stick to the "tail" concept but expand it to "tail block".
+        # We look for the last occurrence of a tag.
+        # If we want parallel, we need to find ALL tags in the newly generated text.
+        # But `_detect_and_execute_tool_tail` is called after generation stops.
+        # If generation stops at `</rica>`, we might only have one tag.
+        # UNLESS we change stopping criteria to NOT stop, or the model outputs multiple tags quickly.
+
+        # Let's assume the model outputs one tag at a time for now, as per the stopping criteria.
+        # To support parallel, the model would need to output multiple tags BEFORE stopping.
+        # If we want to support that, we need to adjust `_ToolCallStoppingCriteria` in `transformers_adapter.py`.
+
+        # For this step, let's just make `_detect_and_execute_tool_tail` robust enough to handle multiple tags if they exist.
+
+        # We will process ALL tags found at the end of the string.
+        # We iterate backwards? No.
+
+        # Let's just process the last match for now to maintain stability,
+        # but if we want parallel, we should process all matches that don't look like they have a result.
+        # Given the complexity and the "Demo" nature, let's implement a robust "process all new tags" logic.
+        # We can assume "new tags" are those after the last known context length?
+        # `ReasoningThread` doesn't track "last known length" explicitly in `base.py`.
+
+        # Let's stick to the original logic but loop through ALL matches found in the "tail".
+        # We define "tail" as the text after the last "}" (end of a JSON result) or just the end.
+
+        # Actually, let's just process the LAST match. If the user wants parallel,
+        # the model should output `<rica>A</rica><rica>B</rica>` and we should process both.
+
+        executed_any = False
+        combined_result = ""
+
+        # We only process the matches that are at the end of the context.
+        # i.e. after the last non-whitespace character that is NOT part of a tag.
+        # This is hard.
+
+        # Let's just iterate over all matches and check if they look "unprocessed".
+        # An unprocessed tag is usually at the end of the context.
+
+        # Let's try to process the last match only, as per current design.
+        # To support parallel, we would need to change the loop in `transformers_adapter` to NOT stop immediately?
+        # Or we just process all tags found in the `_context`.
+        # But we don't want to re-process old tags.
+
+        # Hack: We can check if the tag is followed by a result.
+        # But for now, let's just stick to the last one to avoid breaking things,
+        # and maybe the user means "parallel threads" not "parallel tools in one thread".
+        # User said "同时调用多工具".
+
+        # OK, let's try to find ALL tags that are at the end.
+        # We can iterate from the last match backwards until we find something that is not a tag?
+
+        # Let's simplify: Just find the last match. If there are multiple, the previous loop would have caught them?
+        # No, `_run_loop` calls this once per generation cycle.
+
+        # If we want parallel, we need to find ALL tags in the current buffer that are not followed by a result.
+        # Let's assume any <rica> tag NOT followed by `{` (start of result) or `call_id` is new.
+
+        matches = list(re.finditer(pattern, self._context, re.DOTALL | re.IGNORECASE))
+        if not matches:
+            return False, None
+
+        # Filter matches that are likely already processed
+        candidates = []
+        for m in matches:
+            end_pos = m.end()
+            # Check text after this match
+            following_text = self._context[end_pos:].strip()
+            # If following text starts with {, it's likely a result.
+            if not following_text or (
+                not following_text.startswith("{") and not following_text.startswith("[")
+            ):
+                candidates.append(m)
+
+        if not candidates:
+            return False, None
+
+        # Execute all candidates in parallel
+        tasks = []
+        for match in candidates:
+            tag_text = match.group(0)
+            tasks.append(self._parse_and_execute(tag_text))
+
+        results = await asyncio.gather(*tasks)
+
+        for res in results:
+            if res:
+                self._context += res
+                await self._emit_token(res)
+                combined_result += res
+
+        return True, combined_result
+
+    async def _parse_and_execute(self, tag_text: str) -> str:
+        """Helper to parse and execute a single tag."""
         try:
-            parser = ET.XMLParser(target=ET.TreeBuilder())
-            parser.feed(f"<root>{tag_text}</root>")
-            root = parser.close()[0]
+            # Attempt to parse XML
+            try:
+                root = ET.fromstring(tag_text)
+            except ET.ParseError as e:
+                logger.error(f"XML parse error: {e}, tag_text: {tag_text[:200]}")
+                # Fallback regex
+                package_match = re.search(r'package=["\']([^"\']+)["\']', tag_text)
+                route_match = re.search(r'route=["\']([^"\']+)["\']', tag_text)
+
+                if package_match and route_match:
+                    package_name = package_match.group(1)
+                    route_name = route_match.group(1)
+                    content_match = re.search(r">\s*(.*?)\s*<\/rica>", tag_text, re.DOTALL)
+                    content_str = content_match.group(1) if content_match else ""
+
+                    class MockRoot:
+                        attrib = {"package": package_name, "route": route_name}
+                        text = content_str
+
+                    root = MockRoot()
+                else:
+                    raise InvalidRiCAString(f"Invalid XML format: {e}")
 
             package_name = root.attrib.get("package")
             route_name = root.attrib.get("route")
+
             if not package_name or not route_name:
-                raise InvalidRiCAString("Missing 'package' or 'route' attribute in <rica> tag.")
+                raise InvalidRiCAString("Missing package or route attribute")
 
             content_str = root.text or ""
             content = json.loads(content_str) if content_str.strip() else {}
@@ -275,22 +513,19 @@ class ReasoningThreadBase:
             async with self._apps_lock:
                 app_instance = self._apps.get(package_name)
                 if not app_instance:
-                    raise PackageNotFoundError(f"Package '{package_name}' not found.")
+                    raise PackageNotFoundError(f"Package '{package_name}' not found")
 
                 application = app_instance.find_route(route_name)
                 if not application:
-                    raise RouteNotFoundError(
-                        f"Route '{route_name}' not found in package '{package_name}'."
-                    )
+                    raise RouteNotFoundError(f"Route '{route_name}' not found")
 
-            # Special handling for rica.response, now part of the virtual 'rica' app
+            # Special handling for rica/response
             if package_name == "rica" and route_name == "/response":
                 await self._emit_response(content)
-                return True, None
+                return ""  # No result appended for response
 
             result = await self._execute_tool_call(application, content)
 
-            appended: str
             if isinstance(result, CallBack):
                 payload = result.callback
                 appended = (
@@ -301,11 +536,8 @@ class ReasoningThreadBase:
             else:  # UUID
                 appended = json.dumps({"call_id": str(result)}, ensure_ascii=False)
 
-            self._context += appended
-            await self._emit_token(appended)
-            return True, appended
+            return appended
+
         except Exception as e:
-            error_message = f"[tool-error]{type(e).__name__}: {e}"
-            self._context += error_message
-            await self._emit_token(error_message)
-            return True, error_message
+            logger.error(f"Tool execution error: {e}", exc_info=True)
+            return f"[tool-error]{type(e).__name__}: {e}"

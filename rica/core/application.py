@@ -73,6 +73,7 @@ class CallBack:
         error: The exception object if the status is "error".
         duration_ms: The execution time of the tool in milliseconds.
     """
+
     package: str
     route: str
     call_id: UUID
