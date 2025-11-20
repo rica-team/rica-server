@@ -2,7 +2,12 @@
 This is the RiCA Connector whose purpose is to connect the RiCA Server with the LLM.
 """
 
-# Import the specific adapter to expose it at the package level
+# Base adapter class
+from .base import ReasoningThreadBase
+
+# ---- Adapters ----
+
+# Transformers Adapter (requires `pip install .[pt]`)
 try:
     from . import transformers_adapter as transformer_adapter  # alias for compatibility
     from . import transformers_adapter as transformers_adapter
@@ -18,4 +23,6 @@ except ImportError:
     transformers_adapter = _MissingAdapter()
     transformer_adapter = _MissingAdapter()
 
-__all__ = ["transformers_adapter", "transformer_adapter"]
+# Future adapters (e.g., OpenAI, Anthropic) can be added here in a similar pattern.
+
+__all__ = ["ReasoningThreadBase", "transformers_adapter", "transformer_adapter"]
