@@ -11,7 +11,8 @@ except ImportError:
     class _MissingAdapter:
         def __getattr__(self, name):
             raise ImportError(
-                "The transformers adapter requires 'transformers' and 'torch'. Please install them with `pip install .[pt]`."
+                "The transformers adapter requires 'transformers' and 'torch'. "
+                "Please install them with `pip install .[pt]`."
             )
 
     transformers_adapter = _MissingAdapter()

@@ -63,11 +63,12 @@ async def main():
         'Use <rica package="rica" route="/whiteboard">...</rica> to access whiteboard.'
     )
 
-    # We need to mock the sub-thread's behavior because we don't have a real LLM running that can follow instructions perfectly in this demo environment without a GPU/Model.
+    # We need to mock the sub-thread's behavior because we don't have a real LLM running
+    # that can follow instructions perfectly in this demo environment without a GPU/Model.
     # However, the `ReasoningThread` will try to load the model.
     # If the user doesn't have the model, this will fail.
-    # So we should probably use a MockReasoningThread for the demo if we just want to show the mechanism,
-    # OR we assume the user has the environment set up.
+    # So we should probably use a MockReasoningThread for the demo if we just want to
+    # show the mechanism, OR we assume the user has the environment set up.
     # Given the user's context ("RiCA-Server"), they likely have the environment.
     # But to be safe and show the *mechanism*, maybe we can inject a "fake" model response?
     # The `ReasoningThread` uses `transformers`.
