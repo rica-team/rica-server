@@ -1,4 +1,3 @@
-
 import pytest
 
 from rica.adapters.base import ReasoningThreadBase

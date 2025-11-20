@@ -29,7 +29,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
-    "black"
+    "black[jupyter]"
 ]
 
 [tool.pytest.ini_options]

@@ -55,7 +55,8 @@ async def main():
     # Simulate a complex task
     prompt = (
         "I want you to solve a complex problem using multi-threading.\n"
-        "1. Spawn a sub-thread to calculate 10 + 10 and write the result to whiteboard 'math_result' with description 'Simple Math'.\n"
+        "1. Spawn a sub-thread to calculate 10 + 10 and write the result to whiteboard "
+        "'math_result' with description 'Simple Math'.\n"
         "2. Wait for a bit (simulated by you just waiting).\n"
         "3. Read the whiteboard 'math_result' and tell me the answer.\n"
         'Use <rica package="rica.thread" route="/spawn">...</rica> to spawn.\n'
