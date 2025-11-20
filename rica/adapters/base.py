@@ -74,11 +74,13 @@ class ReasoningThreadBase:
         Installs a RiCA application.
 
         Args:
-            app: An instance of the RiCA class, or a file path (str) to a .py file or .tar.gz archive.
+            app: An instance of the RiCA class, or a file path (str) to a .py file
+                 or .tar.gz archive.
 
         Raises:
             TypeError: If the 'app' argument is invalid.
-            PackageExistError: If an application with the same package name is already installed.
+            PackageExistError: If an application with the same package name is
+                               already installed.
             ImportError: If loading from file fails.
         """
         if isinstance(app, str):
@@ -116,9 +118,10 @@ class ReasoningThreadBase:
                 # Simple heuristic: add temp_dir to sys.path and try to import
                 sys.path.insert(0, temp_dir)
 
-                # Find what to import. We look for the first directory with __init__.py or the first .py file
-                # This is a bit ambiguous. Let's assume the archive contains a folder with the package name
-                # OR the archive content IS the package.
+                # Find what to import. We look for the first directory with __init__.py
+                # or the first .py file. This is a bit ambiguous. Let's assume the
+                # archive contains a folder with the package name OR the archive content
+                # IS the package.
 
                 # Let's try to find a .py file or a directory
                 found_module = None
@@ -360,7 +363,8 @@ class ReasoningThreadBase:
 
         # Only process tags that haven't been processed yet.
         # Since we append results to the context, we need a way to distinguish processed tags.
-        # A simple heuristic is to check if the tag is followed by a result block or if it's at the very end.
+        # A simple heuristic is to check if the tag is followed by a result block
+        # or if it's at the very end.
         # However, simpler is to assume the model generates tags at the end.
         # But if we have multiple tags, we want to process them all.
 
@@ -370,7 +374,8 @@ class ReasoningThreadBase:
         # Simplified Strategy:
         # 1. Find all tags.
         # 2. Filter out tags that already have a corresponding result (this is hard without IDs).
-        # 3. Actually, the standard flow is: Model generates -> Stop at </rica> -> We process -> Append result.
+        # 3. Actually, the standard flow is:
+        #    Model generates -> Stop at </rica> -> We process -> Append result.
         # If the model generates multiple tags in one go (e.g. <rica>A</rica> <rica>B</rica>),
         # the stopping criteria might stop at the first </rica> or the last?
         # The current stopping criteria stops at ANY </rica>.
@@ -390,20 +395,25 @@ class ReasoningThreadBase:
         # If we want parallel, we need to find ALL tags in the newly generated text.
         # But `_detect_and_execute_tool_tail` is called after generation stops.
         # If generation stops at `</rica>`, we might only have one tag.
-        # UNLESS we change stopping criteria to NOT stop, or the model outputs multiple tags quickly.
+        # UNLESS we change stopping criteria to NOT stop, or the model outputs multiple
+        # tags quickly.
 
         # Let's assume the model outputs one tag at a time for now, as per the stopping criteria.
         # To support parallel, the model would need to output multiple tags BEFORE stopping.
-        # If we want to support that, we need to adjust `_ToolCallStoppingCriteria` in `transformers_adapter.py`.
+        # If we want to support that, we need to adjust `_ToolCallStoppingCriteria` in
+        # `transformers_adapter.py`.
 
-        # For this step, let's just make `_detect_and_execute_tool_tail` robust enough to handle multiple tags if they exist.
+        # For this step, let's just make `_detect_and_execute_tool_tail` robust enough
+        # to handle multiple tags if they exist.
 
         # We will process ALL tags found at the end of the string.
         # We iterate backwards? No.
 
         # Let's just process the last match for now to maintain stability,
-        # but if we want parallel, we should process all matches that don't look like they have a result.
-        # Given the complexity and the "Demo" nature, let's implement a robust "process all new tags" logic.
+        # but if we want parallel, we should process all matches that don't look like
+        # they have a result.
+        # Given the complexity and the "Demo" nature, let's implement a robust
+        # "process all new tags" logic.
         # We can assume "new tags" are those after the last known context length?
         # `ReasoningThread` doesn't track "last known length" explicitly in `base.py`.
 
@@ -413,7 +423,6 @@ class ReasoningThreadBase:
         # Actually, let's just process the LAST match. If the user wants parallel,
         # the model should output `<rica>A</rica><rica>B</rica>` and we should process both.
 
-        executed_any = False
         combined_result = ""
 
         # We only process the matches that are at the end of the context.
@@ -424,7 +433,8 @@ class ReasoningThreadBase:
         # An unprocessed tag is usually at the end of the context.
 
         # Let's try to process the last match only, as per current design.
-        # To support parallel, we would need to change the loop in `transformers_adapter` to NOT stop immediately?
+        # To support parallel, we would need to change the loop in `transformers_adapter`
+        # to NOT stop immediately?
         # Or we just process all tags found in the `_context`.
         # But we don't want to re-process old tags.
 
@@ -436,10 +446,12 @@ class ReasoningThreadBase:
         # OK, let's try to find ALL tags that are at the end.
         # We can iterate from the last match backwards until we find something that is not a tag?
 
-        # Let's simplify: Just find the last match. If there are multiple, the previous loop would have caught them?
+        # Let's simplify: Just find the last match. If there are multiple,
+        # the previous loop would have caught them?
         # No, `_run_loop` calls this once per generation cycle.
 
-        # If we want parallel, we need to find ALL tags in the current buffer that are not followed by a result.
+        # If we want parallel, we need to find ALL tags in the current buffer that are not
+        # followed by a result.
         # Let's assume any <rica> tag NOT followed by `{` (start of result) or `call_id` is new.
 
         matches = list(re.finditer(pattern, self._context, re.DOTALL | re.IGNORECASE))
