@@ -3,7 +3,6 @@ import os
 import sys
 import tarfile
 import tempfile
-from typing import Optional
 
 from rica.core.application import RiCA
 
@@ -55,9 +54,7 @@ async def load_app_from_path(path: str) -> RiCA:
                     break
 
             if not found_module:
-                raise ImportError(
-                    "Could not find a valid Python module or package in the archive."
-                )
+                raise ImportError("Could not find a valid Python module or package in the archive.")
 
             try:
                 module = importlib.import_module(found_module)

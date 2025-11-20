@@ -19,4 +19,4 @@ try:
     __version__ = version(_DISTRIBUTION_NAME)
 except PackageNotFoundError:
     # Fallback for when the package is not installed
-    __version__ = "0.0.1-dev2"
+    __version__ = "0.0.1-dev3"

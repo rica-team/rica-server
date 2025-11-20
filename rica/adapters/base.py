@@ -9,7 +9,6 @@ from uuid import uuid4
 from rica.core.application import CallBack, RiCA, Route
 from rica.exceptions import (
     ExecutionTimedOut,
-    InvalidRiCAString,
     PackageExistError,
     PackageNotFoundError,
     RouteNotFoundError,
@@ -98,8 +97,6 @@ class ReasoningThreadBase:
                     f"Application with package '{app_instance.package}' is already installed."
                 )
             self._apps[app_instance.package] = app_instance
-
-
 
     async def uninstall(self, package_name: str):
         """
