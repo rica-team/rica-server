@@ -76,13 +76,16 @@ async def test_xml_parsing_robustness():
 
     # Test malformed XML that regex should recover
     # Missing quotes around attributes, slightly broken tag
+    # Reset context and processed index for new test case
     thread._context = '<rica package="test.pkg" route="/echo">{"msg": "recovered"}</rica>'
+    thread._last_processed_index = 0
     executed, result = await thread._detect_and_execute_tool_tail()
     assert executed
     assert '{"msg": "recovered"}' in result
 
     # Test completely invalid XML
     thread._context = "<rica broken>...</rica>"
+    thread._last_processed_index = 0
     executed, result = await thread._detect_and_execute_tool_tail()
     # Should return True (detected) but result contains error message
     assert executed
