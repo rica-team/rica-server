@@ -57,6 +57,7 @@ class ReasoningThreadBase:
         self._apps: Dict[str, RiCA] = {}
         self._apps_lock = asyncio.Lock()
         self._context: str = context or ""
+        self._last_processed_index: int = 0  # Tracks the end of the last processed tool tag
         self._response_callbacks: List[Callable[[Any], Any]] = []  # For @trigger
         self._token_callbacks: List[Callable[[str], Any]] = []  # For @token_generated
         self._initialized = False
@@ -273,137 +274,34 @@ class ReasoningThreadBase:
     async def _detect_and_execute_tool_tail(self) -> tuple[bool, Optional[str]]:
         """Detect and execute all <rica ...>...</rica> tags in the context."""
         # Find all tags
-        pattern = r"<rica\s+[^>]*>.*?<\/rica>"
-        matches = list(re.finditer(pattern, self._context, re.DOTALL | re.IGNORECASE))
+        pattern = re.compile(r"<rica\s+[^>]*>.*?<\/rica>", re.DOTALL | re.IGNORECASE)
+        # Search starting from the last processed index
+        matches = list(pattern.finditer(self._context, self._last_processed_index))
 
         if not matches:
             return False, None
 
-        # Only process tags that haven't been processed yet.
-        # Since we append results to the context, we need a way to distinguish processed tags.
-        # A simple heuristic is to check if the tag is followed by a result block
-        # or if it's at the very end.
-        # However, simpler is to assume the model generates tags at the end.
-        # But if we have multiple tags, we want to process them all.
-
-        # Strategy: Find the last contiguous block of tags at the end of the context.
-        # This is tricky because there might be whitespace.
-
-        # Simplified Strategy:
-        # 1. Find all tags.
-        # 2. Filter out tags that already have a corresponding result (this is hard without IDs).
-        # 3. Actually, the standard flow is:
-        #    Model generates -> Stop at </rica> -> We process -> Append result.
-        # If the model generates multiple tags in one go (e.g. <rica>A</rica> <rica>B</rica>),
-        # the stopping criteria might stop at the first </rica> or the last?
-        # The current stopping criteria stops at ANY </rica>.
-        # So we likely only have ONE tag at the end.
-        # BUT, if the model is fast or we change stopping criteria, we might have multiple.
-        # Let's assume we process the LAST tag found.
-        # Wait, user wants "simultaneous tool calls".
-        # If the model outputs: <rica>A</rica>\n<rica>B</rica>
-        # We should execute both.
-
-        # Let's try to find all tags that are NOT followed by a result block (e.g. JSON or UUID).
-        # This is getting complex.
-        # Alternative: The `_context` grows. We can keep track of the `last_processed_index`.
-
-        # For now, let's stick to the "tail" concept but expand it to "tail block".
-        # We look for the last occurrence of a tag.
-        # If we want parallel, we need to find ALL tags in the newly generated text.
-        # But `_detect_and_execute_tool_tail` is called after generation stops.
-        # If generation stops at `</rica>`, we might only have one tag.
-        # UNLESS we change stopping criteria to NOT stop, or the model outputs multiple
-        # tags quickly.
-
-        # Let's assume the model outputs one tag at a time for now, as per the stopping criteria.
-        # To support parallel, the model would need to output multiple tags BEFORE stopping.
-        # If we want to support that, we need to adjust `_ToolCallStoppingCriteria` in
-        # `transformers_adapter.py`.
-
-        # For this step, let's just make `_detect_and_execute_tool_tail` robust enough
-        # to handle multiple tags if they exist.
-
-        # We will process ALL tags found at the end of the string.
-        # We iterate backwards? No.
-
-        # Let's just process the last match for now to maintain stability,
-        # but if we want parallel, we should process all matches that don't look like
-        # they have a result.
-        # Given the complexity and the "Demo" nature, let's implement a robust
-        # "process all new tags" logic.
-        # We can assume "new tags" are those after the last known context length?
-        # `ReasoningThread` doesn't track "last known length" explicitly in `base.py`.
-
-        # Let's stick to the original logic but loop through ALL matches found in the "tail".
-        # We define "tail" as the text after the last "}" (end of a JSON result) or just the end.
-
-        # Actually, let's just process the LAST match. If the user wants parallel,
-        # the model should output `<rica>A</rica><rica>B</rica>` and we should process both.
-
-        combined_result = ""
-
-        # We only process the matches that are at the end of the context.
-        # i.e. after the last non-whitespace character that is NOT part of a tag.
-        # This is hard.
-
-        # Let's just iterate over all matches and check if they look "unprocessed".
-        # An unprocessed tag is usually at the end of the context.
-
-        # Let's try to process the last match only, as per current design.
-        # To support parallel, we would need to change the loop in `transformers_adapter`
-        # to NOT stop immediately?
-        # Or we just process all tags found in the `_context`.
-        # But we don't want to re-process old tags.
-
-        # Hack: We can check if the tag is followed by a result.
-        # But for now, let's just stick to the last one to avoid breaking things,
-        # and maybe the user means "parallel threads" not "parallel tools in one thread".
-        # User said "同时调用多工具".
-
-        # OK, let's try to find ALL tags that are at the end.
-        # We can iterate from the last match backwards until we find something that is not a tag?
-
-        # Let's simplify: Just find the last match. If there are multiple,
-        # the previous loop would have caught them?
-        # No, `_run_loop` calls this once per generation cycle.
-
-        # If we want parallel, we need to find ALL tags in the current buffer that are not
-        # followed by a result.
-        # Let's assume any <rica> tag NOT followed by `{` (start of result) or `call_id` is new.
-
-        matches = list(re.finditer(pattern, self._context, re.DOTALL | re.IGNORECASE))
-        if not matches:
-            return False, None
-
-        # Filter matches that are likely already processed
-        candidates = []
-        for m in matches:
-            end_pos = m.end()
-            # Check text after this match
-            following_text = self._context[end_pos:].strip()
-            # If following text starts with {, it's likely a result.
-            if not following_text or (
-                not following_text.startswith("{") and not following_text.startswith("[")
-            ):
-                candidates.append(m)
-
-        if not candidates:
-            return False, None
-
-        # Execute all candidates in parallel
+        # Execute all new matches
         tasks = []
-        for match in candidates:
+        for match in matches:
             tag_text = match.group(0)
             tasks.append(self._parse_and_execute(tag_text))
 
         results = await asyncio.gather(*tasks)
 
+        combined_result = ""
         for res in results:
             if res:
                 self._context += res
                 await self._emit_token(res)
                 combined_result += res
+
+        # Update the processed index to the end of the last matched tag.
+        # We use the match end index directly. Since we haven't modified the context *before* this
+        # point, the indices are valid. The results are appended *after* the current context, so
+        # they don't interfere.
+        if matches:
+            self._last_processed_index = matches[-1].end()
 
         return True, combined_result
 

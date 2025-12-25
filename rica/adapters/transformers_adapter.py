@@ -207,6 +207,7 @@ class ReasoningThread(ReasoningThreadBase):
             async with self._apps_lock:
                 system_prompt = await _rica_prompt(self._apps, self.model_name, self.model_modal)
             self._context = system_prompt + self._context
+            self._last_processed_index += len(system_prompt)
             self._prompt_injected = True
 
     async def _run_loop(self):
